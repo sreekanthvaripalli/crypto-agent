@@ -179,3 +179,87 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+npm-cache/
+.npm/
+.yarn-integrity
+.pnp/
+.pnp.js
+
+# Frontend build
+dist/
+dist-ssr/
+build/
+*.local
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.project
+.classpath
+.settings/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Logs
+logs/
+*.log
+log.txt
+
+# Test results
+test-results/
+surefire-reports/
+*.xml
+
+# Temporary files
+*.bak
+*.temp
+*.cache
+
+# Compiled Java class files
+*.class
+
+# Generated test class files
+*Test.class
+*Tests.class
+
+# Maven build directories
+backend/target/
+
+# Frontend dependencies
+frontend/node_modules/
+
