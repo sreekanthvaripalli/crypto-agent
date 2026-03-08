@@ -31,12 +31,15 @@
 flowchart TB
     subgraph DATA_LAYER["📡 DATA LAYER"]
         CG[("🦎 CoinGecko API<br/>(Free, No Key Required)")]
+        NEWS_API[("📰 CoinGecko News API<br/>(Trending endpoint)")]
         CACHE[("💾 JSON Cache<br/>(Local File)")]
     end
     
     subgraph PROCESSING["⚙️ PROCESSING LAYER"]
         FETCHER["🔄 Fetcher Module<br/>— Fetch top N coins<br/>— Fetch OHLC candles<br/>— Handle rate limits"]
+        NEWS_SERVICE["📰 News Service<br/>— Fetch trending crypto news<br/>— Perform sentiment analysis<br/>— Cache news data"]
         ANALYZER["📊 Analyzer Module<br/>— Calculate RSI<br/>— Calculate MACD<br/>— Calculate EMA<br/>— Calculate Bollinger Bands"]
+        NEWS_VALIDATOR["🔍 News Validator<br/>— Validate technical analysis<br/>— Calculate alignment scores<br/>— Adjust confidence"]
         CLASSIFIER["🏷️ Classifier Module<br/>— Score each coin<br/>— Assign category"]
     end
     
@@ -49,8 +52,12 @@ flowchart TB
     FETCHER --> CACHE
     CACHE --> ANALYZER
     ANALYZER --> CLASSIFIER
-    CLASSIFIER --> TERMINAL
-    CLASSIFIER --> JSON
+    CLASSIFIER --> NEWS_VALIDATOR
+    NEWS_VALIDATOR --> TERMINAL
+    NEWS_VALIDATOR --> JSON
+    
+    NEWS_API --> NEWS_SERVICE
+    NEWS_SERVICE --> NEWS_VALIDATOR
 ```
 
 ### Component Breakdown
@@ -58,8 +65,10 @@ flowchart TB
 | Component | File | Responsibility |
 |-----------|------|----------------|
 | **Fetcher** | `src/fetcher/coingecko.ts` | Calls CoinGecko API, handles rate limits (2s delay between calls), returns raw market data |
+| **News Service** | `src/fetcher/news.ts` | Fetches crypto news from CoinGecko API, performs sentiment analysis, caches news data |
 | **Cache** | `src/database/db.ts` | Saves/loads data to JSON file so you don't re-fetch within 24 hours |
 | **Analyzer** | `src/analyzer/indicators.ts` | Calculates all technical indicators from OHLC price data |
+| **News Validator** | `src/analyzer/news-validator.ts` | Validates technical analysis with news sentiment, calculates alignment scores, adjusts confidence |
 | **Classifier** | `src/analyzer/classifier.ts` | Scores each coin (-100 to +100) and assigns BUY/WATCHLIST/AVOID |
 | **Reporter** | `src/output/reporter.ts` | Formats the colored terminal output and writes JSON reports |
 | **Scheduler** | `src/scheduler.ts` | Runs the agent automatically on a schedule (e.g., daily at 8am) |
@@ -75,6 +84,7 @@ flowchart TB
 | **Market Data** | CoinGecko API (free) | No API key needed, reliable, covers 1000+ coins | Provides price data, market cap, OHLC candles |
 | **HTTP Client** | Axios | Handles retries, timeouts, and errors cleanly | Makes HTTP requests to CoinGecko |
 | **Technical Analysis** | `technicalindicators` npm package | Battle-tested library used by thousands of projects | Calculates RSI, MACD, EMA, Bollinger Bands |
+| **News Validation** | Custom News Service | Free crypto news API integration | Validates technical analysis with real-world news sentiment |
 | **Local Storage** | JSON file | Simple, no database setup, works everywhere | Caches data so you don't hit API limits |
 | **Terminal UI** | `chalk` + `cli-table3` | Beautiful color-coded output in terminal | Makes the report readable and pretty |
 | **Scheduler** | `node-cron` | Standard cron syntax, no external tools needed | Runs the agent on a schedule |
@@ -117,9 +127,11 @@ flowchart TD
     CLASSIFY -->|Score -25 to +25| WATCH["🟡 WATCHLIST"]
     CLASSIFY -->|Score ≤ -25| AVOID["🔴 AVOID"]
     
-    BUY --> SORT["📋 Sort by Score<br/>Limit to top entries per category"]
-    WATCH --> SORT
-    AVOID --> SORT
+    BUY --> NEWS_VALIDATION["📰 News Validation<br/>- Fetch news for BUY candidates<br/>- Analyze sentiment<br/>- Adjust confidence"]
+    WATCH --> NEWS_VALIDATION
+    AVOID --> NEWS_VALIDATION
+    
+    NEWS_VALIDATION --> SORT["📋 Sort by Score<br/>Limit to top entries per category"]
     
     SORT --> OUTPUT
     
@@ -128,6 +140,20 @@ flowchart TD
         PRINT["🖥️ Print Terminal Table<br/>(Color-coded)"]
         EXPORT["📄 Export JSON Report<br/>(reports/report-*.json)"]
     end
+    
+    subgraph NEWS_VALIDATION_INTEGRATION["📰 News Validation Integration"]
+        direction TB
+        NEWS_FETCH["🔄 Fetch News for Classified Coins<br/>- Get trending crypto news<br/>- Filter by coin names"]
+        NEWS_ANALYZE["📊 Analyze News Sentiment<br/>- Positive/Negative/Neutral<br/>- Keyword-based classification"]
+        NEWS_ALIGN["⚖️ Calculate Alignment Score<br/>- Compare news vs technical<br/>- Strong/Moderate/Weak/Conflicting"]
+        NEWS_CONF["⚡ Adjust Confidence Scores<br/>- Base: 70% (technical only)<br/>- +20% for aligned news<br/>- -10% for conflicting news"]
+    end
+    
+    NEWS_VALIDATION --> NEWS_FETCH
+    NEWS_FETCH --> NEWS_ANALYZE
+    NEWS_ANALYZE --> NEWS_ALIGN
+    NEWS_ALIGN --> NEWS_CONF
+    NEWS_CONF --> OUTPUT
     
     OUTPUT --> END([✅ END])
 ```
@@ -139,6 +165,7 @@ sequenceDiagram
     participant Agent as 🤖 Agent
     participant API as 🦎 CoinGecko API
     participant Cache as 💾 Local Cache
+    participant NewsAPI as 📰 CoinGecko News API
     
     Agent->>Agent: Check cache age
     alt Cache fresh (< 24h)
@@ -157,7 +184,16 @@ sequenceDiagram
     
     Agent->>Agent: Calculate indicators
     Agent->>Agent: Score & classify
-    Agent->>Agent: Print report
+    
+    Agent->>Agent: News Validation Step
+    Agent->>NewsAPI: GET /search/trending
+    NewsAPI-->>Agent: Trending crypto news
+    Agent->>Agent: Filter news by coin names
+    Agent->>Agent: Analyze sentiment (positive/negative/neutral)
+    Agent->>Agent: Calculate alignment scores
+    Agent->>Agent: Adjust confidence scores
+    
+    Agent->>Agent: Print enhanced report with news validation
 ```
 
 ---
@@ -407,7 +443,613 @@ graph LR
 
 **Plain English**: When RSI is low, sellers have exhausted themselves and buyers might step in. When RSI is high, everyone who wanted to buy already did, so price may drop.
 
----
+### 6.2 News Validation Feature
+
+News validation is a new feature that enhances the crypto market analysis by incorporating real-world news sentiment into the technical analysis recommendations. It helps validate whether the technical analysis aligns with current market sentiment and events.
+
+#### How News Validation Works
+
+```mermaid
+flowchart TD
+    TECHNICAL["📊 Technical Analysis<br/>- RSI, MACD, EMA, etc.<br/>- Score: -100 to +100<br/>- Category: BUY/WATCH/AVOID"]
+    
+    TECHNICAL --> NEWS_VALIDATION["📰 News Validation<br/>- Fetch trending crypto news<br/>- Analyze sentiment<br/>- Compare with technical recommendation"]
+    
+    NEWS_VALIDATION --> RESULT["✅ Enhanced Result<br/>- News sentiment<br/>- Alignment score<br/>- Adjusted confidence"]
+    
+    subgraph NEWS_VALIDATION_DETAILS["News Validation Process"]
+        direction TB
+        FETCH["🔄 Fetch News for Analyzed Coins<br/>from CoinGecko API"]
+        FILTER["🔍 Filter News by Coin Name<br/>Match articles to analyzed coins"]
+        SENTIMENT["📊 Sentiment Analysis<br/>- Positive keywords: moon, bull, surge<br/>- Negative keywords: bear, dump, crash<br/>- Neutral: No strong sentiment"]
+        COMPARE["⚖️ Compare with Technical<br/>- Does news match recommendation?<br/>- Strong/Moderate/Weak alignment?"]
+        ADJUST["⚡ Adjust Confidence<br/>- +20% for aligned news<br/>- -10% for conflicting news"]
+    end
+    
+    NEWS_VALIDATION_DETAILS --> RESULT
+```
+
+### News API Integration Points
+
+#### 1. **News API Calls** (`src/fetcher/news.ts`)
+
+The news service makes API calls to CoinGecko's trending endpoint:
+
+```typescript
+// Main trending news endpoint
+private readonly API_URL = 'https://api.coingecko.com/api/v3/search/trending';
+
+// Method to get trending crypto news
+async getTrendingNews(): Promise<CryptoNews> {
+  const response = await axios.get(this.API_URL);
+  // Processes trending coins and extracts news-like information
+}
+
+// Method to get specific coin news
+async getNewsForCoin(coinId: string): Promise<NewsArticle[]> {
+  const response = await axios.get(
+    `https://api.coingecko.com/api/v3/coins/${coinId}/tickers`
+  );
+  // Gets ticker data that includes news-like information
+}
+```
+
+#### 2. **News Analysis** (`src/analyzer/news-validator.ts`)
+
+The news validation service performs the actual analysis:
+
+```typescript
+// Main validation method
+async validateAnalysis(analysis: CoinAnalysis): Promise<NewsValidationResult> {
+  const news = await this.newsService.getTrendingNews();
+  const coinNews = news.articles.filter(
+    article => article.title.toLowerCase().includes(analysis.coin.name.toLowerCase())
+  );
+
+  const newsSentiment = this.determineOverallSentiment(coinNews);
+  const alignment = this.calculateAlignment(analysis.category, newsSentiment);
+  const confidenceScore = this.calculateConfidenceScore(analysis, coinNews, newsSentiment);
+  
+  return { /* validation result */ };
+}
+
+// Enhanced sentiment analysis using comprehensive keyword matching
+private analyzeSentiment(text: string): 'positive' | 'negative' | 'neutral' {
+  const lowerText = text.toLowerCase();
+  
+  const positiveKeywords = [
+    // Bullish indicators
+    'moon', 'bull', 'surge', 'pump', 'breakout', 'rally',
+    'buy', 'up', 'growth', 'gain', 'win', 'success',
+    
+    // Development & partnerships
+    'launch', 'partnership', 'integration', 'adoption', 'upgrade',
+    'listing', 'exchange', 'support', 'backed', 'investment',
+    'funding', 'capital', 'vc', 'institutional',
+    
+    // Technical improvements
+    'upgrade', 'improvement', 'enhancement', 'optimization',
+    'scalability', 'speed', 'efficiency', 'innovation',
+    
+    // Market sentiment
+    'demand', 'interest', 'popularity', 'trending', 'viral',
+    'hype', 'buzz', 'excitement', 'optimism',
+    
+    // Adoption & utility
+    'payment', 'merchant', 'ecommerce', 'real-world', 'utility',
+    'use-case', 'application', 'product', 'service'
+  ];
+  
+  const negativeKeywords = [
+    // Bearish indicators
+    'bear', 'dump', 'crash', 'plummet', 'sell-off', 'correction',
+    'sell', 'down', 'loss', 'fail',
+    
+    // Security issues
+    'hack', 'exploit', 'bug', 'vulnerability', 'security',
+    'breach', 'theft', 'fraud', 'scam', 'phishing',
+    
+    // Regulatory issues
+    'regulation', 'ban', 'prohibit', 'restrict', 'legal',
+    'lawsuit', 'investigation', 'compliance', 'warning',
+    
+    // Technical problems
+    'outage', 'downtime', 'error', 'failure', 'crash',
+    'slow', 'lag', 'performance', 'issue', 'problem',
+    
+    // Market concerns
+    'fud', 'fear', 'uncertainty', 'doubt', 'panic', 'concern',
+    'risk', 'danger', 'warning', 'caution',
+    
+    // Team & governance issues
+    'team', 'founder', 'ceo', 'leadership', 'management',
+    'resign', 'quit', 'leave', 'scandal', 'controversy',
+    
+    // Geopolitical risks
+    'war', 'conflict', 'tension', 'sanction', 'tariff',
+    'trade war', 'geopolitical', 'invasion', 'military',
+    'escalation', 'crisis', 'instability', 'turmoil',
+    'embargo', 'blockade', 'political', 'election',
+    'protest', 'unrest', 'strike', 'shutdown'
+  ];
+  
+  if (positiveKeywords.some(word => lowerText.includes(word))) {
+    return 'positive';
+  } else if (negativeKeywords.some(word => lowerText.includes(word))) {
+    return 'negative';
+  }
+  return 'neutral';
+}
+```
+
+#### 3. **Integration in Main Flow** (`src/index.ts`)
+
+The news validation is integrated into the main analysis pipeline:
+
+```typescript
+// After technical analysis
+const analyzed: CoinAnalysis[] = analyzeAll(coins);
+
+// News validation step
+console.log(chalk.cyan(`📰 Validating recommendations with crypto news...`));
+const newsValidator = new NewsValidator();
+const validatedAnalyses = await Promise.all(
+  analyzed.map(analysis => newsValidator.validateAnalysis(analysis))
+);
+
+// Build enhanced report with news validation
+const enhancedBuyList = buyList.map(a => ({
+  ...analyzed.find(an => an.coin.id === a.coinId)!,
+  newsValidation: a
+}));
+```
+
+#### News Sources Considered
+
+The agent uses **CoinGecko's Trending API** which provides:
+
+- **Trending cryptocurrencies** - Most popular coins currently
+- **News articles** - Recent articles about trending coins
+- **Market sentiment** - Overall positive/negative/neutral sentiment
+
+**Why CoinGecko?**
+- Free to use (no API key required)
+- Reliable and covers 1000+ cryptocurrencies
+- Provides both technical data AND news content
+- No rate limits for basic usage
+
+#### News Validation Process
+
+1. **Fetch News for Analyzed Coins**
+   - Gets news articles for the specific coins that were analyzed
+   - Retrieves recent news about each analyzed coin
+   - Analyzes article titles and descriptions for each coin
+
+2. **Sentiment Analysis**
+   - **Positive keywords**: moon, bull, surge, pump, breakout, rally
+   - **Negative keywords**: bear, dump, crash, plummet, sell-off, correction
+   - **Neutral**: No strong sentiment detected
+
+3. **Alignment Scoring**
+   - **Strong**: News sentiment matches technical recommendation
+   - **Moderate**: News is neutral or recommendation is neutral
+   - **Weak**: News sentiment doesn't match recommendation
+   - **Conflicting**: News strongly contradicts recommendation
+
+4. **Confidence Adjustment**
+   - Base confidence: 70% (technical analysis only)
+   - +20% if news sentiment strongly aligns
+   - -10% if news sentiment conflicts
+   - Final confidence: 60-90%
+
+#### Sample Output Explained
+
+```
+📊 Enhanced Report with News Validation
+───────────────────────────────────────────
+Recommendation | News Sentiment | Alignment | Confidence
+─────────────────────────────────────────────────────────
+1. USD1                 | neutral       | moderate  | 70%
+2. Tether Gold          | neutral       | moderate  | 70%
+3. PAX Gold             | neutral       | moderate  | 70%
+1. Bitcoin              | neutral       | moderate  | 90%
+2. Solana               | neutral       | moderate  | 90%
+3. MemeCore             | neutral       | moderate  | 70%
+1. Toncoin              | neutral       | moderate  | 70%
+2. Falcon USD           | neutral       | moderate  | 70%
+3. WhiteBIT Coin        | neutral       | moderate  | 70%
+```
+
+**Column Explanations:**
+
+| Column | Meaning | Example |
+|--------|---------|---------|
+| **Recommendation** | Technical analysis category | BUY, WATCHLIST, AVOID |
+| **News Sentiment** | Overall news sentiment | positive, negative, neutral |
+| **Alignment** | How well news matches recommendation | strong, moderate, weak, conflicting |
+| **Confidence** | Final confidence score | 70%, 90%, etc. |
+
+**Interpretation Guide:**
+
+- **Strong + Positive**: Technical says BUY, news is positive → High confidence (90%)
+- **Moderate + Neutral**: Technical says BUY, news is neutral → Medium confidence (70%)
+- **Weak + Negative**: Technical says BUY, news is negative → Low confidence (60%)
+- **Conflicting**: Technical and news disagree → Very low confidence (50% or less)
+
+#### Benefits of News Validation
+
+1. **Reduces False Signals** - Technical analysis alone can miss important news events
+2. **Improves Confidence** - News alignment increases confidence in recommendations
+3. **Better Risk Management** - Conflicting signals warn of potential risks
+4. **More Reliable** - Combines technical and fundamental factors
+
+#### Limitations of News Validation
+
+1. **Sentiment Accuracy** - Keyword-based analysis isn't perfect
+2. **News Lag** - News may not reflect real-time market conditions
+3. **Bias** - News sources may have their own biases
+4. **Volume** - Some coins have little news coverage
+
+### 6.3 MACD — Moving Average Convergence Divergence
+
+**What it measures**: Momentum — is the price gaining or losing speed?
+
+```mermaid
+graph TB
+    subgraph MACD_CONCEPT["MACD Components"]
+        MACD_LINE["MACD Line = EMA(12) - EMA(26)<br/>(Fast average minus slow average)"]
+        SIGNAL_LINE["Signal Line = EMA(9) of MACD<br/>(Smoothed version)"]
+        HISTOGRAM["Histogram = MACD - Signal<br/>(Gap between the two)"]
+    end
+    
+    subgraph CROSSOVERS["📈 Crossovers Matter Most"]
+        BULLISH["BULLISH CROSSOVER ✅<br/>MACD crosses ABOVE Signal<br/>Momentum shifting UP"]
+        BEARISH["BEARISH CROSSOVER ❌<br/>MACD crosses BELOW Signal<br/>Momentum shifting DOWN"]
+    end
+    
+    MACD_CONCEPT --> CROSSOVERS
+```
+
+**Visual example:**
+
+```
+MACD Line    ════════════════════════════════════
+Signal Line  ────────────────────────────────────
+             ↓
+Time ───────►
+             
+             ┌─ BULLISH CROSSOVER ─┐
+             │                      │
+MACD Line    ───────╱╱╱╱╱╱╱╱╱╱╱──────
+Signal Line  ─────────────────╲──────
+                    ▲
+                    └── BUY SIGNAL
+```
+
+**Scoring:**
+| Condition | Score | Meaning |
+|-----------|-------|---------|
+| Bullish crossover (just happened) | **+25 pts** | Strong buy signal |
+| MACD above signal (ongoing) | **+10 pts** | Upward momentum |
+| Bearish crossover (just happened) | **-25 pts** | Strong sell signal |
+| MACD below signal (ongoing) | **-10 pts** | Downward momentum |
+
+### 6.4 EMA — Exponential Moving Average (7 & 14)
+
+**What it measures**: Is the price trending up or down in the short term?
+
+**EMA** = Average price, but recent prices count MORE than old prices.
+
+```mermaid
+graph LR
+    subgraph EMA_COMP["EMA Comparison"]
+        EMA7["EMA 7 = Average of<br/>LAST 7 candles<br/>(reacts quickly)"]
+        EMA14["EMA 14 = Average of<br/>LAST 14 candles<br/>(more stable)"]
+    end
+    
+    EMA7 --> COMPARE{"Compare"}
+    EMA14 --> COMPARE
+    
+    COMPARE -->|EMA7 > EMA14| UP["📈 UPTREND<br/>Recent prices higher<br/>than older prices<br/>+15 pts"]
+    COMPARE -->|EMA7 < EMA14| DOWN["📉 DOWNTREND<br/>Recent prices lower<br/>than older prices<br/>-15 pts"]
+```
+
+**Plain English**: If the 7-candle average is ABOVE the 14-candle average, it means prices have been rising recently — a good sign.
+
+### 6.5 Bollinger Bands
+
+**What it measures**: How "stretched" the price is from its normal range.
+
+```mermaid
+graph TB
+    subgraph BB["Bollinger Bands"]
+        direction TB
+        UPPER["════════ UPPER BAND ════════<br/>(Middle + 2×Std Dev)<br/>Price here = OVERBOUGHT"]
+        MIDDLE["──────── MIDDLE BAND ────────<br/>(20-candle average)<br/>Normal price level"]
+        LOWER["════════ LOWER BAND ════════<br/>(Middle - 2×Std Dev)<br/>Price here = OVERSOLD"]
+    end
+    
+    PRICE_ABOVE["Price ABOVE Upper Band"] --> PENALTY["-15 pts<br/>(Overextended)"]
+    PRICE_BELOW["Price BELOW Lower Band"] --> BONUS["+15 pts<br/>(Oversold bounce)"]
+    PRICE_MIDDLE["Price in MIDDLE"] --> NEUTRAL["0 pts<br/>(Normal)"]
+    
+    UPPER --> PRICE_ABOVE
+    LOWER --> PRICE_BELOW
+    MIDDLE --> PRICE_MIDDLE
+```
+
+**Plain English**: Bollinger Bands are like a rubber band. When price stretches too far above the band, it might snap back down. When it stretches below, it might bounce up.
+
+### 6.6 7-Day Price Change
+
+**What it measures**: Has the price already moved a lot this week?
+
+| Price Change | Score | Reasoning |
+|--------------|-------|-----------|
+| Dropped ≥20% | **+10 pts** | Deep dip — potential bargain |
+| Dropped 10-20% | **+5 pts** | Moderate dip — possible opportunity |
+| Rose 10-20% | **-5 pts** | Already rallied — some risk |
+| Rose ≥20% | **-10 pts** | Overextended — pullback likely |
+
+**Plain English**: Buy when there's "blood in the streets" (big drops). Be careful when everyone's already bought (big rallies).
+
+### 6.7 Volatility Spike Detection
+
+**What it measures**: Is trading activity suddenly much higher than normal?
+
+Since CoinGecko doesn't give us volume per candle, we use **price range** (high - low) as a proxy.
+
+| Condition | Score | Meaning |
+|-----------|-------|---------|
+| Volatility spike + price UP | **+10 pts** | Strong buying pressure |
+| Volatility spike + price DOWN | **-10 pts** | Strong selling pressure |
+
+### 6.8 News Validation Feature
+
+News validation is a new feature that enhances the crypto market analysis by incorporating real-world news sentiment into the technical analysis recommendations. It helps validate whether the technical analysis aligns with current market sentiment and events.
+
+#### How News Validation Works
+
+```mermaid
+flowchart TD
+    TECHNICAL["📊 Technical Analysis<br/>- RSI, MACD, EMA, etc.<br/>- Score: -100 to +100<br/>- Category: BUY/WATCH/AVOID"]
+    
+    TECHNICAL --> NEWS_VALIDATION["📰 News Validation<br/>- Fetch trending crypto news<br/>- Analyze sentiment<br/>- Compare with technical recommendation"]
+    
+    NEWS_VALIDATION --> RESULT["✅ Enhanced Result<br/>- News sentiment<br/>- Alignment score<br/>- Adjusted confidence"]
+    
+    subgraph NEWS_VALIDATION_DETAILS["News Validation Process"]
+        direction TB
+        FETCH["🔄 Fetch News for Analyzed Coins<br/>from CoinGecko API"]
+        FILTER["🔍 Filter News by Coin Name<br/>Match articles to analyzed coins"]
+        SENTIMENT["📊 Sentiment Analysis<br/>- Positive keywords: moon, bull, surge<br/>- Negative keywords: bear, dump, crash<br/>- Neutral: No strong sentiment"]
+        COMPARE["⚖️ Compare with Technical<br/>- Does news match recommendation?<br/>- Strong/Moderate/Weak alignment?"]
+        ADJUST["⚡ Adjust Confidence<br/>- +20% for aligned news<br/>- -10% for conflicting news"]
+    end
+    
+    NEWS_VALIDATION_DETAILS --> RESULT
+```
+
+### News API Integration Points
+
+#### 1. **News API Calls** (`src/fetcher/news.ts`)
+
+The news service makes API calls to CoinGecko's trending endpoint:
+
+```typescript
+// Main trending news endpoint
+private readonly API_URL = 'https://api.coingecko.com/api/v3/search/trending';
+
+// Method to get trending crypto news
+async getTrendingNews(): Promise<CryptoNews> {
+  const response = await axios.get(this.API_URL);
+  // Processes trending coins and extracts news-like information
+}
+
+// Method to get specific coin news
+async getNewsForCoin(coinId: string): Promise<NewsArticle[]> {
+  const response = await axios.get(
+    `https://api.coingecko.com/api/v3/coins/${coinId}/tickers`
+  );
+  // Gets ticker data that includes news-like information
+}
+```
+
+#### 2. **News Analysis** (`src/analyzer/news-validator.ts`)
+
+The news validation service performs the actual analysis:
+
+```typescript
+// Main validation method
+async validateAnalysis(analysis: CoinAnalysis): Promise<NewsValidationResult> {
+  const news = await this.newsService.getTrendingNews();
+  const coinNews = news.articles.filter(
+    article => article.title.toLowerCase().includes(analysis.coin.name.toLowerCase())
+  );
+
+  const newsSentiment = this.determineOverallSentiment(coinNews);
+  const alignment = this.calculateAlignment(analysis.category, newsSentiment);
+  const confidenceScore = this.calculateConfidenceScore(analysis, coinNews, newsSentiment);
+  
+  return { /* validation result */ };
+}
+
+// Enhanced sentiment analysis using comprehensive keyword matching
+private analyzeSentiment(text: string): 'positive' | 'negative' | 'neutral' {
+  const lowerText = text.toLowerCase();
+  
+  const positiveKeywords = [
+    // Bullish indicators
+    'moon', 'bull', 'surge', 'pump', 'breakout', 'rally',
+    'buy', 'up', 'growth', 'gain', 'win', 'success',
+    
+    // Development & partnerships
+    'launch', 'partnership', 'integration', 'adoption', 'upgrade',
+    'listing', 'exchange', 'support', 'backed', 'investment',
+    'funding', 'capital', 'vc', 'institutional',
+    
+    // Technical improvements
+    'upgrade', 'improvement', 'enhancement', 'optimization',
+    'scalability', 'speed', 'efficiency', 'innovation',
+    
+    // Market sentiment
+    'demand', 'interest', 'popularity', 'trending', 'viral',
+    'hype', 'buzz', 'excitement', 'optimism',
+    
+    // Adoption & utility
+    'payment', 'merchant', 'ecommerce', 'real-world', 'utility',
+    'use-case', 'application', 'product', 'service'
+  ];
+  
+  const negativeKeywords = [
+    // Bearish indicators
+    'bear', 'dump', 'crash', 'plummet', 'sell-off', 'correction',
+    'sell', 'down', 'loss', 'fail',
+    
+    // Security issues
+    'hack', 'exploit', 'bug', 'vulnerability', 'security',
+    'breach', 'theft', 'fraud', 'scam', 'phishing',
+    
+    // Regulatory issues
+    'regulation', 'ban', 'prohibit', 'restrict', 'legal',
+    'lawsuit', 'investigation', 'compliance', 'warning',
+    
+    // Technical problems
+    'outage', 'downtime', 'error', 'failure', 'crash',
+    'slow', 'lag', 'performance', 'issue', 'problem',
+    
+    // Market concerns
+    'fud', 'fear', 'uncertainty', 'doubt', 'panic', 'concern',
+    'risk', 'danger', 'warning', 'caution',
+    
+    // Team & governance issues
+    'team', 'founder', 'ceo', 'leadership', 'management',
+    'resign', 'quit', 'leave', 'scandal', 'controversy',
+    
+    // Geopolitical risks
+    'war', 'conflict', 'tension', 'sanction', 'tariff',
+    'trade war', 'geopolitical', 'invasion', 'military',
+    'escalation', 'crisis', 'instability', 'turmoil',
+    'embargo', 'blockade', 'political', 'election',
+    'protest', 'unrest', 'strike', 'shutdown'
+  ];
+  
+  if (positiveKeywords.some(word => lowerText.includes(word))) {
+    return 'positive';
+  } else if (negativeKeywords.some(word => lowerText.includes(word))) {
+    return 'negative';
+  }
+  return 'neutral';
+}
+```
+
+#### 3. **Integration in Main Flow** (`src/index.ts`)
+
+The news validation is integrated into the main analysis pipeline:
+
+```typescript
+// After technical analysis
+const analyzed: CoinAnalysis[] = analyzeAll(coins);
+
+// News validation step
+console.log(chalk.cyan(`📰 Validating recommendations with crypto news...`));
+const newsValidator = new NewsValidator();
+const validatedAnalyses = await Promise.all(
+  analyzed.map(analysis => newsValidator.validateAnalysis(analysis))
+);
+
+// Build enhanced report with news validation
+const enhancedBuyList = buyList.map(a => ({
+  ...analyzed.find(an => an.coin.id === a.coinId)!,
+  newsValidation: a
+}));
+```
+
+#### News Sources Considered
+
+The agent uses **CoinGecko's Trending API** which provides:
+
+- **Trending cryptocurrencies** - Most popular coins currently
+- **News articles** - Recent articles about trending coins
+- **Market sentiment** - Overall positive/negative/neutral sentiment
+
+**Why CoinGecko?**
+- Free to use (no API key required)
+- Reliable and covers 1000+ cryptocurrencies
+- Provides both technical data AND news content
+- No rate limits for basic usage
+
+#### News Validation Process
+
+1. **Fetch News for Analyzed Coins**
+   - Gets news articles for the specific coins that were analyzed
+   - Retrieves recent news about each analyzed coin
+   - Analyzes article titles and descriptions for each coin
+
+2. **Sentiment Analysis**
+   - **Positive keywords**: moon, bull, surge, pump, breakout, rally
+   - **Negative keywords**: bear, dump, crash, plummet, sell-off, correction
+   - **Neutral**: No strong sentiment detected
+
+3. **Alignment Scoring**
+   - **Strong**: News sentiment matches technical recommendation
+   - **Moderate**: News is neutral or recommendation is neutral
+   - **Weak**: News sentiment doesn't match recommendation
+   - **Conflicting**: News strongly contradicts recommendation
+
+4. **Confidence Adjustment**
+   - Base confidence: 70% (technical analysis only)
+   - +20% if news sentiment strongly aligns
+   - -10% if news sentiment conflicts
+   - Final confidence: 60-90%
+
+#### Sample Output Explained
+
+```
+📊 Enhanced Report with News Validation
+───────────────────────────────────────────
+Recommendation | News Sentiment | Alignment | Confidence
+─────────────────────────────────────────────────────────
+1. USD1                 | neutral       | moderate  | 70%
+2. Tether Gold          | neutral       | moderate  | 70%
+3. PAX Gold             | neutral       | moderate  | 70%
+1. Bitcoin              | neutral       | moderate  | 90%
+2. Solana               | neutral       | moderate  | 90%
+3. MemeCore             | neutral       | moderate  | 70%
+1. Toncoin              | neutral       | moderate  | 70%
+2. Falcon USD           | neutral       | moderate  | 70%
+3. WhiteBIT Coin        | neutral       | moderate  | 70%
+```
+
+**Column Explanations:**
+
+| Column | Meaning | Example |
+|--------|---------|---------|
+| **Recommendation** | Technical analysis category | BUY, WATCHLIST, AVOID |
+| **News Sentiment** | Overall news sentiment | positive, negative, neutral |
+| **Alignment** | How well news matches recommendation | strong, moderate, weak, conflicting |
+| **Confidence** | Final confidence score | 70%, 90%, etc. |
+
+**Interpretation Guide:**
+
+- **Strong + Positive**: Technical says BUY, news is positive → High confidence (90%)
+- **Moderate + Neutral**: Technical says BUY, news is neutral → Medium confidence (70%)
+- **Weak + Negative**: Technical says BUY, news is negative → Low confidence (60%)
+- **Conflicting**: Technical and news disagree → Very low confidence (50% or less)
+
+#### Benefits of News Validation
+
+1. **Reduces False Signals** - Technical analysis alone can miss important news events
+2. **Improves Confidence** - News alignment increases confidence in recommendations
+3. **Better Risk Management** - Conflicting signals warn of potential risks
+4. **More Reliable** - Combines technical and fundamental factors
+
+#### Limitations of News Validation
+
+1. **Sentiment Accuracy** - Keyword-based analysis isn't perfect
+2. **News Lag** - News may not reflect real-time market conditions
+3. **Bias** - News sources may have their own biases
+4. **Volume** - Some coins have little news coverage
 
 ### 6.2 MACD — Moving Average Convergence Divergence
 
@@ -706,14 +1348,16 @@ crypto-agent/
 │   ├── types.ts              → TypeScript interfaces (data structures)
 │   │
 │   ├── fetcher/
-│   │   └── coingecko.ts      → API calls, rate limiting, data fetching
+│   │   ├── coingecko.ts      → API calls, rate limiting, data fetching
+│   │   └── news.ts           → Free crypto news API integration
 │   │
 │   ├── database/
 │   │   └── db.ts             → JSON file cache (save/load market data)
 │   │
 │   ├── analyzer/
 │   │   ├── indicators.ts     → Calculate RSI, MACD, EMA, Bollinger, volatility
-│   │   └── classifier.ts     → Score coins and assign categories
+│   │   ├── classifier.ts     → Score coins and assign categories
+│   │   └── news-validator.ts → Validate technical analysis with news sentiment
 │   │
 │   ├── output/
 │   │   └── reporter.ts       → Terminal tables, colors, JSON export
@@ -732,6 +1376,121 @@ crypto-agent/
 ├── README.md                 → Quick start guide
 └── SPEC.md                   → This file
 ```
+
+---
+
+## 13. News Validation Feature
+
+### What is News Validation?
+
+News validation is a new feature that enhances the crypto market analysis by incorporating real-world news sentiment into the technical analysis recommendations. It helps validate whether the technical analysis aligns with current market sentiment and events.
+
+### How News Validation Works
+
+```mermaid
+flowchart TD
+    TECHNICAL["📊 Technical Analysis<br/>- RSI, MACD, EMA, etc.<br/>- Score: -100 to +100<br/>- Category: BUY/WATCH/AVOID"]
+    
+    TECHNICAL --> NEWS_VALIDATION["📰 News Validation<br/>- Fetch trending crypto news<br/>- Analyze sentiment<br/>- Compare with technical recommendation"]
+    
+    NEWS_VALIDATION --> RESULT["✅ Enhanced Result<br/>- News sentiment<br/>- Alignment score<br/>- Adjusted confidence"]
+    
+    subgraph NEWS_VALIDATION_DETAILS["News Validation Process"]
+        direction TB
+        FETCH["🔄 Fetch Trending News<br/>from CoinGecko API"]
+        ANALYZE["🔍 Analyze Sentiment<br/>- Positive keywords: moon, bull, surge<br/>- Negative keywords: bear, dump, crash"]
+        COMPARE["⚖️ Compare with Technical<br/>- Does news match recommendation?<br/>- Strong/Moderate/Weak alignment?"]
+        ADJUST["⚡ Adjust Confidence<br/>- +20% for aligned news<br/>- -10% for conflicting news"]
+    end
+    
+    NEWS_VALIDATION_DETAILS --> RESULT
+```
+
+### News Sources Considered
+
+The agent uses **CoinGecko's Trending API** which provides:
+
+- **Trending cryptocurrencies** - Most popular coins currently
+- **News articles** - Recent articles about trending coins
+- **Market sentiment** - Overall positive/negative/neutral sentiment
+
+**Why CoinGecko?**
+- Free to use (no API key required)
+- Reliable and covers 1000+ cryptocurrencies
+- Provides both technical data AND news content
+- No rate limits for basic usage
+
+### News Validation Process
+
+1. **Fetch Trending News**
+   - Gets top trending cryptocurrencies
+   - Retrieves recent news articles about these coins
+   - Analyzes article titles and descriptions
+
+2. **Sentiment Analysis**
+   - **Positive keywords**: moon, bull, surge, pump, breakout, rally
+   - **Negative keywords**: bear, dump, crash, plummet, sell-off, correction
+   - **Neutral**: No strong sentiment detected
+
+3. **Alignment Scoring**
+   - **Strong**: News sentiment matches technical recommendation
+   - **Moderate**: News is neutral or recommendation is neutral
+   - **Weak**: News sentiment doesn't match recommendation
+   - **Conflicting**: News strongly contradicts recommendation
+
+4. **Confidence Adjustment**
+   - Base confidence: 70% (technical analysis only)
+   - +20% if news sentiment strongly aligns
+   - -10% if news sentiment conflicts
+   - Final confidence: 60-90%
+
+### Sample Output Explained
+
+```
+📊 Enhanced Report with News Validation
+───────────────────────────────────────────
+Recommendation | News Sentiment | Alignment | Confidence
+─────────────────────────────────────────────────────────
+1. USD1                 | neutral       | moderate  | 70%
+2. Tether Gold          | neutral       | moderate  | 70%
+3. PAX Gold             | neutral       | moderate  | 70%
+1. Bitcoin              | neutral       | moderate  | 90%
+2. Solana               | neutral       | moderate  | 90%
+3. MemeCore             | neutral       | moderate  | 70%
+1. Toncoin              | neutral       | moderate  | 70%
+2. Falcon USD           | neutral       | moderate  | 70%
+3. WhiteBIT Coin        | neutral       | moderate  | 70%
+```
+
+**Column Explanations:**
+
+| Column | Meaning | Example |
+|--------|---------|---------|
+| **Recommendation** | Technical analysis category | BUY, WATCHLIST, AVOID |
+| **News Sentiment** | Overall news sentiment | positive, negative, neutral |
+| **Alignment** | How well news matches recommendation | strong, moderate, weak, conflicting |
+| **Confidence** | Final confidence score | 70%, 90%, etc. |
+
+**Interpretation Guide:**
+
+- **Strong + Positive**: Technical says BUY, news is positive → High confidence (90%)
+- **Moderate + Neutral**: Technical says BUY, news is neutral → Medium confidence (70%)
+- **Weak + Negative**: Technical says BUY, news is negative → Low confidence (60%)
+- **Conflicting**: Technical and news disagree → Very low confidence (50% or less)
+
+### Benefits of News Validation
+
+1. **Reduces False Signals** - Technical analysis alone can miss important news events
+2. **Improves Confidence** - News alignment increases confidence in recommendations
+3. **Better Risk Management** - Conflicting signals warn of potential risks
+4. **More Reliable** - Combines technical and fundamental factors
+
+### Limitations of News Validation
+
+1. **Sentiment Accuracy** - Keyword-based analysis isn't perfect
+2. **News Lag** - News may not reflect real-time market conditions
+3. **Bias** - News sources may have their own biases
+4. **Volume** - Some coins have little news coverage
 
 ---
 

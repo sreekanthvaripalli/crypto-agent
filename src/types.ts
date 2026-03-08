@@ -51,10 +51,25 @@ export interface CoinAnalysis {
   score: number; // -100 to +100
 }
 
+export interface NewsValidationResult {
+  coinId: string;
+  coinName: string;
+  recommendation: string;
+  newsSentiment: 'positive' | 'negative' | 'neutral';
+  alignment: 'strong' | 'moderate' | 'weak' | 'conflicting';
+  confidenceScore: number;
+  newsArticles: number;
+  validationNotes: string[];
+}
+
+export interface EnhancedCoinAnalysis extends CoinAnalysis {
+  newsValidation?: NewsValidationResult;
+}
+
 export interface MarketReport {
   generatedAt: Date;
   totalCoinsAnalyzed: number;
-  buyList: CoinAnalysis[];
-  watchList: CoinAnalysis[];
-  avoidList: CoinAnalysis[];
+  buyList: EnhancedCoinAnalysis[];
+  watchList: EnhancedCoinAnalysis[];
+  avoidList: EnhancedCoinAnalysis[];
 }

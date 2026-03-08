@@ -3,6 +3,7 @@ import { saveMarketData, loadLatestMarketData, cleanOldData, closeDb } from './d
 import { analyzeAll } from './analyzer/classifier';
 import { printReport, exportReportToJson } from './output/reporter';
 import { MarketReport, CoinAnalysis } from './types';
+import { NewsValidator } from './analyzer/news-validator';
 import chalk from 'chalk';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
@@ -58,30 +59,81 @@ async function run(): Promise<void> {
   console.log(chalk.cyan(`🔬 Running technical analysis on ${coins.length} coins...`));
   const analyzed: CoinAnalysis[] = analyzeAll(coins);
 
+  // ─── Validate with news context ────────────────────────────────────────────
+  console.log(chalk.cyan(`📰 Validating recommendations with crypto news...`));
+  const newsValidator = new NewsValidator();
+  const validatedAnalyses = await Promise.all(
+    analyzed.map(analysis => newsValidator.validateAnalysis(analysis))
+  );
+
   // ─── Separate into categories ───────────────────────────────────────────────
-  const buyList = analyzed
-    .filter((a) => a.category === 'BUY')
-    .sort((a, b) => b.score - a.score)
+  const buyList = validatedAnalyses
+    .filter((a) => a.recommendation === 'BUY' && a.confidenceScore >= 0.6)
+    .sort((a, b) => b.confidenceScore - a.confidenceScore)
     .slice(0, CONFIG.maxBuyResults);
 
-  const avoidList = analyzed
-    .filter((a) => a.category === 'AVOID')
-    .sort((a, b) => a.score - b.score)
+  const avoidList = validatedAnalyses
+    .filter((a) => a.recommendation === 'AVOID' && a.confidenceScore >= 0.6)
+    .sort((a, b) => a.confidenceScore - b.confidenceScore)
     .slice(0, CONFIG.maxAvoidResults);
 
-  const watchList = analyzed
-    .filter((a) => a.category === 'WATCHLIST')
-    .sort((a, b) => b.score - a.score)
+  const watchList = validatedAnalyses
+    .filter((a) => a.recommendation === 'WATCHLIST' || a.confidenceScore < 0.6)
+    .sort((a, b) => b.confidenceScore - (a.confidenceScore || 0))
     .slice(0, CONFIG.maxWatchResults);
+
+  // ─── Build enhanced analysis objects ────────────────────────────────────────
+  const enhancedBuyList = buyList.map(a => ({
+    ...analyzed.find(an => an.coin.id === a.coinId)!,
+    newsValidation: a
+  }));
+
+  const enhancedAvoidList = avoidList.map(a => ({
+    ...analyzed.find(an => an.coin.id === a.coinId)!,
+    newsValidation: a
+  }));
+
+  const enhancedWatchList = watchList.map(a => ({
+    ...analyzed.find(an => an.coin.id === a.coinId)!,
+    newsValidation: a
+  }));
 
   // ─── Build report ───────────────────────────────────────────────────────────
   const report: MarketReport = {
     generatedAt: new Date(),
     totalCoinsAnalyzed: analyzed.length,
-    buyList,
-    watchList,
-    avoidList,
+    buyList: enhancedBuyList,
+    watchList: enhancedWatchList,
+    avoidList: enhancedAvoidList,
   };
+
+  // ─── Print enhanced report with news validation ────────────────────────────
+  console.log(chalk.cyan('\n📊 Enhanced Report with News Validation'));
+  console.log(chalk.gray('───────────────────────────────────────────'));
+  console.log(chalk.gray('Recommendation | News Sentiment | Alignment | Confidence'));
+  console.log(chalk.gray('─────────────────────────────────────────────────────────'));
+
+  buyList.forEach((a, i) => {
+    console.log(chalk.green(
+      `${i + 1}. ${a.coinName.padEnd(20)} | ${a.newsSentiment.padEnd(13)} | ${a.alignment.padEnd(9)} | ${Math.round(a.confidenceScore * 100)}%`
+    ));
+  });
+
+  watchList.forEach((a, i) => {
+    console.log(chalk.yellow(
+      `${i + 1}. ${a.coinName.padEnd(20)} | ${a.newsSentiment.padEnd(13)} | ${a.alignment.padEnd(9)} | ${Math.round(a.confidenceScore * 100)}%`
+    ));
+  });
+
+  avoidList.forEach((a, i) => {
+    console.log(chalk.red(
+      `${i + 1}. ${a.coinName.padEnd(20)} | ${a.newsSentiment.padEnd(13)} | ${a.alignment.padEnd(9)} | ${Math.round(a.confidenceScore * 100)}%`
+    ));
+  });
+
+  console.log(chalk.gray('─────────────────────────────────────────────────────────'));
+  console.log(chalk.gray(`\n✅ ${buyList.length} strong buys, ${watchList.length} watchlist, ${avoidList.length} avoid recommendations`));
+  console.log(chalk.gray(`   Based on ${validatedAnalyses.length} coins analyzed with news validation\n`));
 
   // ─── Print report ───────────────────────────────────────────────────────────
   printReport(report);
