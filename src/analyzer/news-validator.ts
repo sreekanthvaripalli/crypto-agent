@@ -13,7 +13,7 @@ interface NewsValidationResult {
 }
 
 export class NewsValidator {
-  private newsService: NewsService;
+  public newsService: NewsService;
 
   constructor() {
     this.newsService = new NewsService();

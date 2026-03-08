@@ -4,7 +4,7 @@ import { CoinMarketData } from '../types';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const CACHE_FILE = path.join(DATA_DIR, 'market-cache.json');
-const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_AGE_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 interface CacheEntry {
   fetchedAt: number;

@@ -39,6 +39,9 @@ flowchart TB
         FETCHER["🔄 Fetcher Module<br/>— Fetch top N coins<br/>— Fetch OHLC candles<br/>— Handle rate limits"]
         NEWS_SERVICE["📰 News Service<br/>— Fetch trending crypto news<br/>— Perform sentiment analysis<br/>— Cache news data"]
         ANALYZER["📊 Analyzer Module<br/>— Calculate RSI<br/>— Calculate MACD<br/>— Calculate EMA<br/>— Calculate Bollinger Bands"]
+        ADVANCED_INDICATORS["📈 Advanced Indicators<br/>— Ichimoku Cloud<br/>— ATR, ADX<br/>— Williams %R, CCI<br/>— Stochastic Oscillator"]
+        RISK_MANAGER["⚠️ Risk Manager<br/>— Kelly Criterion sizing<br/>— VaR calculation<br/>— Diversification analysis<br/>— Stop-loss optimization"]
+        ML_SENTIMENT["🤖 ML Sentiment Analyzer<br/>— TF-IDF vectorization<br/>— Ensemble methods<br/>— Context pattern recognition<br/>— Advanced keyword matching"]
         NEWS_VALIDATOR["🔍 News Validator<br/>— Validate technical analysis<br/>— Calculate alignment scores<br/>— Adjust confidence"]
         CLASSIFIER["🏷️ Classifier Module<br/>— Score each coin<br/>— Assign category"]
     end
@@ -46,18 +49,23 @@ flowchart TB
     subgraph OUTPUT["📤 OUTPUT LAYER"]
         TERMINAL["🖥️ Terminal Reporter<br/>(Color-coded tables)"]
         JSON["📄 JSON Report<br/>(Saved to disk)"]
+        PORTFOLIO["💼 Portfolio Analysis<br/>(Risk metrics, rebalancing)"]
     end
     
     CG --> FETCHER
     FETCHER --> CACHE
     CACHE --> ANALYZER
-    ANALYZER --> CLASSIFIER
+    ANALYZER --> ADVANCED_INDICATORS
+    ADVANCED_INDICATORS --> RISK_MANAGER
+    RISK_MANAGER --> CLASSIFIER
     CLASSIFIER --> NEWS_VALIDATOR
     NEWS_VALIDATOR --> TERMINAL
     NEWS_VALIDATOR --> JSON
+    NEWS_VALIDATOR --> PORTFOLIO
     
     NEWS_API --> NEWS_SERVICE
-    NEWS_SERVICE --> NEWS_VALIDATOR
+    NEWS_SERVICE --> ML_SENTIMENT
+    ML_SENTIMENT --> NEWS_VALIDATOR
 ```
 
 ### Component Breakdown
@@ -68,6 +76,9 @@ flowchart TB
 | **News Service** | `src/fetcher/news.ts` | Fetches crypto news from CoinGecko API, performs sentiment analysis, caches news data |
 | **Cache** | `src/database/db.ts` | Saves/loads data to JSON file so you don't re-fetch within 24 hours |
 | **Analyzer** | `src/analyzer/indicators.ts` | Calculates all technical indicators from OHLC price data |
+| **Advanced Indicators** | `src/analyzer/advanced-indicators.ts` | Ichimoku Cloud, ATR, ADX, Williams %R, CCI, Stochastic Oscillator |
+| **Risk Manager** | `src/analyzer/risk-management.ts` | Kelly Criterion sizing, VaR calculation, diversification analysis, stop-loss optimization |
+| **ML Sentiment Analyzer** | `src/analyzer/ml-sentiment.ts` | TF-IDF vectorization, ensemble methods, context pattern recognition, advanced keyword matching |
 | **News Validator** | `src/analyzer/news-validator.ts` | Validates technical analysis with news sentiment, calculates alignment scores, adjusts confidence |
 | **Classifier** | `src/analyzer/classifier.ts` | Scores each coin (-100 to +100) and assigns BUY/WATCHLIST/AVOID |
 | **Reporter** | `src/output/reporter.ts` | Formats the colored terminal output and writes JSON reports |
@@ -98,7 +109,7 @@ flowchart TB
 ```mermaid
 flowchart TD
     START([🚀 START]) --> PARSE["📋 Parse CLI Arguments<br/>--refresh? --limit=N? --no-json?"]
-    PARSE --> CACHE_CHECK{"📂 Cache exists<br/>and < 24 hours old?"}
+    PARSE --> CACHE_CHECK{"📂 Cache exists<br/>and < 4 hours old?"}
     
     CACHE_CHECK -->|YES| LOAD["📖 Load Cached Data<br/>from market-cache.json"]
     CACHE_CHECK -->|NO or --refresh| FETCH["🌐 Fetch from CoinGecko"]
@@ -120,7 +131,11 @@ flowchart TD
         PRICE_7D["7-Day Price Change<br/>Dip vs Rally"]
     end
     
-    ANALYZE --> SCORE["🔢 Calculate Score<br/>Sum all indicator points<br/>(Range: -100 to +100)"]
+    ANALYZE --> ADVANCED_INDICATORS["📈 Advanced Indicators<br/>- Ichimoku Cloud<br/>- ATR, ADX<br/>- Williams %R, CCI<br/>- Stochastic Oscillator"]
+    
+    ADVANCED_INDICATORS --> RISK_ANALYSIS["⚠️ Risk Analysis<br/>- Kelly Criterion sizing<br/>- VaR calculation<br/>- Diversification analysis<br/>- Stop-loss optimization"]
+    
+    RISK_ANALYSIS --> SCORE["🔢 Calculate Score<br/>Sum all indicator points<br/>(Range: -100 to +100)"]
     
     SCORE --> CLASSIFY{"🏷️ Classify by Score"}
     CLASSIFY -->|Score ≥ +25| BUY["🟢 BUY CANDIDATE"]
@@ -131,7 +146,11 @@ flowchart TD
     WATCH --> NEWS_VALIDATION
     AVOID --> NEWS_VALIDATION
     
-    NEWS_VALIDATION --> SORT["📋 Sort by Score<br/>Limit to top entries per category"]
+    NEWS_VALIDATION --> ML_SENTIMENT["🤖 ML Sentiment Analysis<br/>- TF-IDF vectorization<br/>- Ensemble methods<br/>- Context pattern recognition<br/>- Advanced keyword matching"]
+    
+    ML_SENTIMENT --> PORTFOLIO_ANALYSIS["💼 Portfolio Analysis<br/>- Risk metrics calculation<br/>- Diversification scoring<br/>- Rebalancing recommendations"]
+    
+    PORTFOLIO_ANALYSIS --> SORT["📋 Sort by Score<br/>Limit to top entries per category"]
     
     SORT --> OUTPUT
     
@@ -139,6 +158,7 @@ flowchart TD
         direction LR
         PRINT["🖥️ Print Terminal Table<br/>(Color-coded)"]
         EXPORT["📄 Export JSON Report<br/>(reports/report-*.json)"]
+        PORTFOLIO_REPORT["💼 Portfolio Report<br/>(Risk metrics, allocation)"]
     end
     
     subgraph NEWS_VALIDATION_INTEGRATION["📰 News Validation Integration"]
@@ -1356,8 +1376,11 @@ crypto-agent/
 │   │
 │   ├── analyzer/
 │   │   ├── indicators.ts     → Calculate RSI, MACD, EMA, Bollinger, volatility
-│   │   ├── classifier.ts     → Score coins and assign categories
-│   │   └── news-validator.ts → Validate technical analysis with news sentiment
+│   │   ├── advanced-indicators.ts → Ichimoku Cloud, ATR, ADX, Williams %R, CCI, Stochastic
+│   │   ├── risk-management.ts → Kelly Criterion, VaR, diversification analysis, stop-loss
+│   │   ├── ml-sentiment.ts   → TF-IDF vectorization, ensemble methods, advanced keyword matching
+│   │   ├── news-validator.ts → Validate technical analysis with news sentiment
+│   │   └── classifier.ts     → Score coins and assign categories
 │   │
 │   ├── output/
 │   │   └── reporter.ts       → Terminal tables, colors, JSON export
@@ -1373,19 +1396,244 @@ crypto-agent/
 │
 ├── package.json              → Dependencies and scripts
 ├── tsconfig.json             → TypeScript configuration
-├── README.md                 → Quick start guide
-└── SPEC.md                   → This file
+├── README.md                 → Quick start guide with enhanced features
+└── SPEC.md                   → This comprehensive specification
 ```
 
 ---
 
-## 13. News Validation Feature
+## 13. Enhanced Features - Explained for Beginners
 
-### What is News Validation?
+### 13.1 Advanced Technical Indicators
+
+The agent now includes sophisticated technical indicators beyond basic RSI, MACD, and EMA. Let me explain these in simple terms:
+
+#### Ichimoku Cloud Analysis - "The Cloud Indicator"
+```mermaid
+flowchart TD
+    IC["Ichimoku Cloud Components"]
+    IC --> CL["Conversion Line (Tenkan-sen)<br/>Fast trend indicator"]
+    IC --> BL["Base Line (Kijun-sen)<br/>Slow trend indicator"]
+    IC --> SA["Leading Span A<br/>Future support/resistance"]
+    IC --> SB["Leading Span B<br/>Future cloud boundary"]
+    IC --> LS["Lagging Span<br/>Price confirmation"]
+    
+    CL --> POSITION["Cloud Position Analysis"]
+    BL --> POSITION
+    SA --> POSITION
+    SB --> POSITION
+    
+    POSITION --> ABOVE["🟢 Above Cloud<br/>Bullish trend"]
+    POSITION --> BELOW["🔴 Below Cloud<br/>Bearish trend"]
+    POSITION --> IN["🟡 In Cloud<br/>Consolidation"]
+```
+
+**What is the Ichimoku Cloud?**
+Think of it as a weather forecast for crypto prices. The "cloud" shows where prices might find support (like a floor) or resistance (like a ceiling) in the future.
+
+**Key Benefits for Beginners:**
+- **Multi-timeframe analysis**: Shows trends on different time scales at once
+- **Future levels**: Predicts where support/resistance might be
+- **Trend direction**: Easy to see if up, down, or sideways
+
+**Simple Rule:**
+- **🟢 Above Cloud** = Price is strong, likely to keep rising
+- **🔴 Below Cloud** = Price is weak, likely to keep falling  
+- **🟡 In Cloud** = Price is stuck, waiting for direction
+
+#### Average True Range (ATR) - "Volatility Meter"
+- **Purpose**: Measures how much prices jump around
+- **Simple Explanation**: Like measuring how "jumpy" the price is
+- **Usage**: Helps decide how much to invest and where to place stop-losses
+- **Formula**: Average of price movement ranges over time
+
+**Why ATR Matters:**
+- High ATR = Price moves a lot (high risk, high reward)
+- Low ATR = Price moves slowly (lower risk, lower reward)
+
+#### Average Directional Index (ADX) - "Trend Strength Meter"
+- **Purpose**: Tells you if the market is trending or just moving sideways
+- **Range**: 0-100 (values above 25 = strong trend)
+- **Simple Rule**: ADX > 25 = good time to follow trends, ADX < 25 = avoid trend trading
+
+**For Beginners:**
+- **ADX > 25**: Market has clear direction (up or down)
+- **ADX < 25**: Market is confused, going sideways
+
+#### Williams %R and CCI - "Momentum Detectors"
+- **Williams %R**: Like RSI but different scale (0 to -100)
+- **CCI**: Measures if price is too high or too low compared to average
+- **Usage**: Find good entry/exit points
+
+#### Stochastic Oscillator - "Speedometer for Price"
+- **Components**: %K (current momentum), %D (smoothed momentum), signal line
+- **Range**: 0-100
+- **Signals**: When lines cross, it suggests momentum is changing
+
+**Simple Stochastic Rules:**
+- **Above 80** = Overbought (might drop soon)
+- **Below 20** = Oversold (might rise soon)
+- **Crossing lines** = Momentum changing
+
+### 13.2 Advanced Risk Management - "Smart Money Protection"
+
+#### Position Sizing with Kelly Criterion - "How Much to Bet"
+```typescript
+// Kelly Formula - Think of it as "How much of your money should you risk?"
+const winProbability = (score + 100) / 200; // How likely you are to win
+const lossProbability = 1 - winProbability;  // How likely you are to lose
+const odds = 1.0; // 1:1 risk-reward assumption
+const kellyFraction = (odds * winProbability - lossProbability) / odds;
+const positionSize = Math.min(kellyFraction * 0.5, 0.1); // Max 10% per trade
+```
+
+**What is Kelly Criterion?**
+It's a math formula that tells you the optimal amount to bet based on your edge and risk.
+
+**For Beginners:**
+- **High confidence score** = Can risk more money
+- **Low confidence score** = Risk less money
+- **Never risk more than 10%** on any single coin
+
+#### Dynamic Stop-Loss - "Automatic Safety Net"
+- **Base Stop-Loss**: 2x ATR (twice the normal volatility)
+- **Risk-Adjusted**: Modified by confidence score
+- **Minimum**: 5% stop-loss level
+
+**What is a Stop-Loss?**
+It's like an automatic sell order that protects you from big losses.
+
+**Simple Stop-Loss Rules:**
+- **High volatility coin** = Wider stop-loss (5-10%)
+- **Low volatility coin** = Tighter stop-loss (3-5%)
+- **High confidence** = Can use tighter stop-loss
+
+#### Portfolio Diversification - "Don't Put All Eggs in One Basket"
+- **Correlation Matrix**: How different coins move together
+- **Diversification Score**: 1 = perfectly diversified, 0 = all coins move together
+- **Risk Contribution**: How much each coin adds to overall risk
+
+**Why Diversification Matters:**
+- **Correlated coins** = All go up/down together (bad)
+- **Uncorrelated coins** = Move independently (good)
+- **Goal**: Mix coins that don't move together
+
+#### Value at Risk (VaR) - "Worst Case Scenario Calculator"
+- **Method**: Math that estimates maximum expected loss
+- **Confidence**: 95% sure you won't lose more than this amount
+- **Usage**: Know your worst-case scenario before investing
+
+**Simple VaR Example:**
+- **Portfolio VaR = $1,000**: 95% chance you won't lose more than $1,000 in one day
+- **Helps you sleep at night** knowing your maximum potential loss
+
+### 13.3 Machine Learning Enhanced Sentiment Analysis - "Smart News Reading"
+
+#### TF-IDF Vectorization - "Smart Word Importance"
+```mermaid
+flowchart LR
+    DOC["Document Collection"]
+    DOC --> VOCAB["Vocabulary Building"]
+    VOCAB --> TF["Term Frequency<br/>TF(t,d) = (Frequency of term t in document d) / (Total terms in document d)"]
+    VOCAB --> IDF["Inverse Document Frequency<br/>IDF(t) = log(Total documents / Documents containing term t)"]
+    TF --> TFIDF["TF-IDF Score<br/>TF-IDF(t,d) = TF(t,d) × IDF(t)"]
+    IDF --> TFIDF
+```
+
+**What is TF-IDF?**
+It's a way to figure out which words are most important in news articles.
+
+**Simple Explanation:**
+- **TF (Term Frequency)**: How often a word appears in an article
+- **IDF (Inverse Document Frequency)**: How rare that word is across all articles
+- **TF-IDF**: Important words = Frequent in this article, rare in others
+
+#### Ensemble Sentiment Analysis - "Three Smart Readers"
+The ML system uses three different "readers" to analyze news:
+
+1. **Keyword-Based Reader**
+   - Looks for specific positive/negative words
+   - Simple but fast
+   - Like reading a book and highlighting key words
+
+2. **TF-IDF Reader**
+   - Finds important words using math
+   - More sophisticated
+   - Like a professor analyzing text
+
+3. **Context Reader**
+   - Looks for phrases and patterns
+   - Understands context
+   - Like a human understanding sarcasm
+
+**Why Three Readers?**
+- **More accurate** than any single method
+- **Reduces mistakes** from relying on one approach
+- **Covers more scenarios**
+
+#### Advanced Keyword Coverage
+
+**Positive Keywords (50+ terms):**
+- **Bullish indicators**: moon, bull, surge, pump, breakout, rally
+- **Development**: launch, partnership, integration, adoption, upgrade
+- **Market sentiment**: demand, interest, popularity, trending, viral
+- **Regulatory clarity**: approved, legal, regulated, compliant, clearance
+
+**Negative Keywords (60+ terms):**
+- **Bearish indicators**: bear, dump, crash, plummet, sell-off, correction
+- **Security issues**: hack, exploit, bug, vulnerability, breach, theft
+- **Regulatory issues**: regulation, ban, prohibit, restrict, lawsuit, investigation
+- **Geopolitical risks**: war, conflict, tension, sanction, tariff, trade war
+
+**For Beginners:**
+- **Positive words** = Good news for crypto
+- **Negative words** = Bad news for crypto
+- **More words covered** = Better analysis
+
+### 13.4 Portfolio Analysis and Management - "Smart Money Management"
+
+#### Portfolio-Level Risk Assessment
+- **Diversification Score**: 0-1 scale (1 = perfectly diversified)
+- **Overall Risk Level**: Low/Medium/High based on volatility
+- **Expected Return**: Weighted average of all coin returns
+
+**Simple Portfolio Rules:**
+- **High diversification** = Lower risk
+- **Low diversification** = Higher risk
+- **Mix different types** of coins for best results
+
+#### Risk Metrics Calculation
+```typescript
+interface PortfolioRiskMetrics {
+  portfolioVolatility: number;    // How much your portfolio jumps around
+  maxDrawdown: number;           // Biggest loss from peak to bottom
+  sharpeRatio: number;           // Risk-adjusted returns (higher = better)
+  var95: number;                 // 95% confidence worst-case daily loss
+}
+```
+
+**What These Metrics Mean:**
+- **Portfolio Volatility**: How "jumpy" your investments are
+- **Max Drawdown**: Worst loss you've experienced
+- **Sharpe Ratio**: How much return you get per unit of risk
+- **VaR 95%**: How much you might lose in a bad day
+
+#### Rebalancing Recommendations
+- **High Volatility**: Reduce position sizes (too risky)
+- **High Correlation**: Add different types of coins
+- **Poor Performance**: Consider exiting losing positions
+- **Strong Alignment**: Increase allocation to winning coins
+
+**When to Rebalance:**
+- **Monthly**: Check if allocations are still good
+- **After big moves**: If some coins gained/lost a lot
+- **When correlation changes**: If coins start moving together
+
+### 13.5 News Validation Feature - "Fact-Checking Your Analysis"
 
 News validation is a new feature that enhances the crypto market analysis by incorporating real-world news sentiment into the technical analysis recommendations. It helps validate whether the technical analysis aligns with current market sentiment and events.
 
-### How News Validation Works
+#### How News Validation Works
 
 ```mermaid
 flowchart TD
@@ -1406,7 +1654,19 @@ flowchart TD
     NEWS_VALIDATION_DETAILS --> RESULT
 ```
 
-### News Sources Considered
+#### Why News Validation Matters
+
+**The Problem:**
+- Technical analysis only looks at price history
+- It misses important news events
+- Can give false signals during major news
+
+**The Solution:**
+- Check if news supports technical analysis
+- Increase confidence when they agree
+- Warn when they disagree
+
+#### News Sources Considered
 
 The agent uses **CoinGecko's Trending API** which provides:
 
@@ -1420,7 +1680,7 @@ The agent uses **CoinGecko's Trending API** which provides:
 - Provides both technical data AND news content
 - No rate limits for basic usage
 
-### News Validation Process
+#### News Validation Process
 
 1. **Fetch Trending News**
    - Gets top trending cryptocurrencies
@@ -1444,7 +1704,7 @@ The agent uses **CoinGecko's Trending API** which provides:
    - -10% if news sentiment conflicts
    - Final confidence: 60-90%
 
-### Sample Output Explained
+#### Sample Output Explained
 
 ```
 📊 Enhanced Report with News Validation
@@ -1478,19 +1738,162 @@ Recommendation | News Sentiment | Alignment | Confidence
 - **Weak + Negative**: Technical says BUY, news is negative → Low confidence (60%)
 - **Conflicting**: Technical and news disagree → Very low confidence (50% or less)
 
-### Benefits of News Validation
+#### Benefits of News Validation
 
 1. **Reduces False Signals** - Technical analysis alone can miss important news events
 2. **Improves Confidence** - News alignment increases confidence in recommendations
 3. **Better Risk Management** - Conflicting signals warn of potential risks
 4. **More Reliable** - Combines technical and fundamental factors
 
-### Limitations of News Validation
+#### Limitations of News Validation
 
 1. **Sentiment Accuracy** - Keyword-based analysis isn't perfect
 2. **News Lag** - News may not reflect real-time market conditions
 3. **Bias** - News sources may have their own biases
 4. **Volume** - Some coins have little news coverage
+
+### 13.6 TODO: Future Enhancements
+
+The following features are planned for future implementation:
+
+#### 13.6.1 Real-time Features (TODO)
+- **WebSocket Integration**: Live price updates and streaming data
+- **Alert System**: Price alerts and signal notifications
+- **Live Dashboard**: Real-time market monitoring interface
+
+#### 13.6.2 Multi-timeframe Analysis (TODO)
+- **Timeframe Correlation**: Analyze different timeframes (1h, 4h, daily)
+- **Signal Confirmation**: Multi-timeframe signal validation
+- **Trend Consistency**: Check trend alignment across timeframes
+
+#### 13.6.3 Backtesting Engine (TODO)
+- **Historical Testing**: Test strategies against historical data
+- **Performance Metrics**: Sharpe ratio, maximum drawdown, win rate
+- **Strategy Optimization**: Parameter tuning and optimization
+
+#### 13.6.4 Customizable Strategies (TODO)
+- **Strategy Builder**: Create custom trading strategies
+- **Indicator Combinations**: Mix and match different indicators
+- **Risk Profiles**: Conservative, moderate, aggressive strategies
+
+#### 13.6.5 Exchange Integration (TODO)
+- **API Connections**: Connect to major exchanges (Binance, Coinbase, Kraken)
+- **Automated Trading**: Execute trades based on signals
+- **Portfolio Sync**: Sync with exchange portfolios
+
+### 13.7 Implementation Status
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **Advanced Technical Indicators** | ✅ Complete | Ichimoku Cloud, ATR, ADX, Williams %R, CCI, Stochastic |
+| **Advanced Risk Management** | ✅ Complete | Kelly Criterion, VaR, diversification analysis |
+| **ML Enhanced Sentiment Analysis** | ✅ Complete | TF-IDF, ensemble methods, comprehensive keywords |
+| **Portfolio Analysis** | ✅ Complete | Risk metrics, rebalancing recommendations |
+| **News Validation** | ✅ Complete | ML-enhanced sentiment with alignment scoring |
+| **Real-time Features** | ⏳ TODO | WebSocket, alerts, live dashboard |
+| **Multi-timeframe Analysis** | ⏳ TODO | Cross-timeframe validation and correlation |
+| **Backtesting Engine** | ⏳ TODO | Historical testing and performance metrics |
+| **Customizable Strategies** | ⏳ TODO | Strategy builder and risk profiles |
+| **Exchange Integration** | ⏳ TODO | API connections and automated trading |
+
+### 13.8 Enhanced Architecture Diagram
+
+```mermaid
+flowchart TB
+    subgraph DATA_LAYER["📡 DATA LAYER"]
+        CG[("🦎 CoinGecko API<br/>(Free, No Key Required)")]
+        NEWS_API[("📰 CoinGecko News API<br/>(Trending endpoint)")]
+        CACHE[("💾 JSON Cache<br/>(Local File)")]
+    end
+    
+    subgraph PROCESSING["⚙️ PROCESSING LAYER"]
+        FETCHER["🔄 Fetcher Module<br/>— Fetch top N coins<br/>— Fetch OHLC candles<br/>— Handle rate limits"]
+        NEWS_SERVICE["📰 News Service<br/>— Fetch trending crypto news<br/>— Perform sentiment analysis<br/>— Cache news data"]
+        ANALYZER["📊 Analyzer Module<br/>— Calculate RSI<br/>— Calculate MACD<br/>— Calculate EMA<br/>— Calculate Bollinger Bands"]
+        ADVANCED_INDICATORS["📈 Advanced Indicators<br/>— Ichimoku Cloud<br/>— ATR, ADX<br/>— Williams %R, CCI<br/>— Stochastic Oscillator"]
+        RISK_MANAGER["⚠️ Risk Manager<br/>— Kelly Criterion sizing<br/>— VaR calculation<br/>— Diversification analysis<br/>— Stop-loss optimization"]
+        ML_SENTIMENT["🤖 ML Sentiment Analyzer<br/>— TF-IDF vectorization<br/>— Ensemble methods<br/>— Context pattern recognition<br/>— Advanced keyword matching"]
+        NEWS_VALIDATOR["🔍 News Validator<br/>— Validate technical analysis<br/>— Calculate alignment scores<br/>— Adjust confidence"]
+        CLASSIFIER["🏷️ Classifier Module<br/>— Score each coin<br/>— Assign category"]
+    end
+    
+    subgraph OUTPUT["📤 OUTPUT LAYER"]
+        TERMINAL["🖥️ Terminal Reporter<br/>(Color-coded tables)"]
+        JSON["📄 JSON Report<br/>(Saved to disk)"]
+        PORTFOLIO["💼 Portfolio Analysis<br/>(Risk metrics, rebalancing)"]
+    end
+    
+    CG --> FETCHER
+    FETCHER --> CACHE
+    CACHE --> ANALYZER
+    ANALYZER --> ADVANCED_INDICATORS
+    ADVANCED_INDICATORS --> RISK_MANAGER
+    RISK_MANAGER --> CLASSIFIER
+    CLASSIFIER --> NEWS_VALIDATOR
+    NEWS_VALIDATOR --> TERMINAL
+    NEWS_VALIDATOR --> JSON
+    NEWS_VALIDATOR --> PORTFOLIO
+    
+    NEWS_API --> NEWS_SERVICE
+    NEWS_SERVICE --> ML_SENTIMENT
+    ML_SENTIMENT --> NEWS_VALIDATOR
+```
+
+This enhanced architecture demonstrates the comprehensive nature of the upgraded crypto market analysis agent, incorporating advanced technical analysis, sophisticated risk management, machine learning-enhanced sentiment analysis, and comprehensive portfolio management capabilities.
+
+### 13.9 Beginner's Guide to Using This Agent
+
+#### Step 1: Understanding the Output
+When you run the agent, you'll see three main sections:
+
+1. **🟢 BUY CANDIDATES** - Coins with strong bullish signals
+2. **🟡 WATCHLIST** - Coins with mixed or neutral signals  
+3. **🔴 AVOID** - Coins with strong bearish signals
+
+#### Step 2: Checking News Validation
+For each coin, look at:
+- **News Sentiment**: What's the news saying?
+- **Alignment**: Does news match technical analysis?
+- **Confidence**: How sure are we about this recommendation?
+
+#### Step 3: Making Decisions
+- **High Confidence (80-90%)**: Strong signal, consider action
+- **Medium Confidence (60-79%)**: Moderate signal, research more
+- **Low Confidence (50-59%)**: Weak signal, probably avoid
+
+#### Step 4: Risk Management
+- **Don't invest more than 10%** in any single coin
+- **Diversify** across different types of coins
+- **Use stop-losses** to limit potential losses
+- **Only invest what you can afford to lose**
+
+#### Step 5: Continuous Learning
+- **Track your decisions** and their outcomes
+- **Learn from mistakes** and adjust your approach
+- **Stay updated** on crypto news and developments
+- **Remember**: No system is perfect, always do your own research
+
+### 13.10 Common Beginner Mistakes to Avoid
+
+1. **Chasing High Confidence Scores**: High confidence doesn't guarantee profits
+2. **Ignoring News Validation**: Technical analysis alone can miss important events
+3. **Over-Investing**: Never risk more than you can afford to lose
+4. **Not Using Stop-Losses**: Always have an exit strategy
+5. **Following Without Understanding**: Learn what the indicators mean
+6. **Panic Selling**: Stick to your strategy during volatile periods
+7. **Ignoring Diversification**: Don't put all your money in one coin
+
+### 13.11 Key Takeaways for Beginners
+
+1. **This is a tool, not a crystal ball** - Use it to inform decisions, not make them for you
+2. **Risk management is crucial** - Protect your capital first, profits second
+3. **News matters** - Always check if technical signals align with real-world events
+4. **Start small** - Practice with small amounts before scaling up
+5. **Continuous learning** - The crypto market evolves rapidly, stay informed
+6. **Diversification reduces risk** - Don't put all your eggs in one basket
+7. **Emotions are the enemy** - Stick to your strategy, don't trade based on fear or greed
+
+This enhanced specification provides a complete understanding of how the crypto market analysis agent works, from basic concepts to advanced features, ensuring that even complete beginners can understand and use the system effectively.
 
 ---
 

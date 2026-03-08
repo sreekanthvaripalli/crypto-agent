@@ -1,6 +1,9 @@
 import { fetchFullMarketData } from './fetcher/coingecko';
 import { saveMarketData, loadLatestMarketData, cleanOldData, closeDb } from './database/db';
 import { analyzeAll } from './analyzer/classifier';
+import { AdvancedIndicatorsCalculator } from './analyzer/advanced-indicators';
+import { RiskManager } from './analyzer/risk-management';
+import { MLSentimentAnalyzer } from './analyzer/ml-sentiment';
 import { printReport, exportReportToJson } from './output/reporter';
 import { MarketReport, CoinAnalysis } from './types';
 import { NewsValidator } from './analyzer/news-validator';
@@ -59,11 +62,28 @@ async function run(): Promise<void> {
   console.log(chalk.cyan(`🔬 Running technical analysis on ${coins.length} coins...`));
   const analyzed: CoinAnalysis[] = analyzeAll(coins);
 
-  // ─── Validate with news context ────────────────────────────────────────────
-  console.log(chalk.cyan(`📰 Validating recommendations with crypto news...`));
+  // ─── Calculate advanced indicators ──────────────────────────────────────────
+  console.log(chalk.cyan(`📈 Calculating advanced technical indicators...`));
+  const advancedCalculator = new AdvancedIndicatorsCalculator();
+  const enhancedAnalyses = analyzed.map(coin => ({
+    ...coin,
+    advancedIndicators: advancedCalculator.calculateAllAdvancedIndicators(coin)
+  }));
+
+  // ─── Calculate risk metrics ─────────────────────────────────────────────────
+  console.log(chalk.cyan(`⚠️  Calculating risk metrics and position sizing...`));
+  const riskManager = new RiskManager();
+  const riskEnhancedAnalyses = enhancedAnalyses.map(coin => ({
+    ...coin,
+    riskMetrics: riskManager.calculateRiskMetrics(coin)
+  }));
+
+  // ─── Validate with ML-enhanced news context ─────────────────────────────────
+  console.log(chalk.cyan(`🤖 Analyzing news sentiment with ML...`));
   const newsValidator = new NewsValidator();
+  const mlSentimentAnalyzer = new MLSentimentAnalyzer(newsValidator.newsService);
   const validatedAnalyses = await Promise.all(
-    analyzed.map(analysis => newsValidator.validateAnalysis(analysis))
+    riskEnhancedAnalyses.map(analysis => mlSentimentAnalyzer.analyzeSentimentWithML(analysis))
   );
 
   // ─── Separate into categories ───────────────────────────────────────────────

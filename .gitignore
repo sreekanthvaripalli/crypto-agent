@@ -263,3 +263,5 @@ backend/target/
 # Frontend dependencies
 frontend/node_modules/
 
+# Ignore created reports
+reports/*.json

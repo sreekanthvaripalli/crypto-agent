@@ -1,6 +1,44 @@
 # 🤖 Crypto Market Analysis Agent
 
-A local crypto market analysis agent that checks the top 50 coins by market cap and suggests which ones to **buy**, **watchlist**, or **avoid** — based on the last 7 days of price performance using pure technical analysis.
+A professional-grade crypto market analysis agent that checks the top 50 coins by market cap and suggests which ones to **buy**, **watchlist**, or **avoid** — using advanced technical analysis, machine learning sentiment analysis, and sophisticated risk management.
+
+---
+
+## 🚀 What's New - Enhanced Features
+
+### 📈 Advanced Technical Indicators
+- **Ichimoku Cloud** - Multi-timeframe analysis with future support/resistance levels
+- **ATR (Average True Range)** - Volatility measurement for position sizing and stop-loss
+- **ADX (Average Directional Index)** - Trend strength validation (filters ranging markets)
+- **Williams %R** - Momentum oscillator for overbought/oversold detection
+- **CCI (Commodity Channel Index)** - Price level relative to statistical average
+- **Stochastic Oscillator** - %K, %D, and signal line for momentum analysis
+
+### ⚠️ Advanced Risk Management
+- **Kelly Criterion Position Sizing** - Mathematical approach to optimal position sizing
+- **Value at Risk (VaR)** - 95% confidence level risk measurement
+- **Portfolio Diversification Analysis** - Correlation matrix and diversification scoring
+- **Dynamic Stop-Loss** - ATR-based with confidence score adjustments
+- **Risk-Adjusted Returns** - Sharpe ratio and portfolio volatility analysis
+
+### 🤖 Machine Learning Enhanced Sentiment Analysis
+- **TF-IDF Vectorization** - Term frequency-inverse document frequency for keyword importance
+- **Ensemble Methods** - Three complementary approaches for higher accuracy
+- **Advanced Keyword Coverage** - 50+ positive and 60+ negative keywords including geopolitical risks
+- **Context Pattern Recognition** - Regex-based phrase detection for strong signals
+- **Multi-factor Confidence Scoring** - Weighted combination of all sentiment methods
+
+### 📊 Portfolio Analysis and Management
+- **Portfolio-Level Risk Assessment** - Overall risk scoring and diversification analysis
+- **Risk Metrics Calculation** - Volatility, max drawdown, Sharpe ratio, VaR
+- **Rebalancing Recommendations** - Automated suggestions based on risk metrics
+- **Correlation Analysis** - Cross-coin correlation matrix for diversification
+
+### 📰 Enhanced News Validation
+- **ML-Enhanced Sentiment** - Uses the new ML sentiment analyzer
+- **Alignment Scoring** - Strong/Moderate/Weak/Conflicting signal alignment
+- **Confidence Adjustment** - Dynamic confidence based on news alignment
+- **Comprehensive Coverage** - Includes geopolitical risks and regulatory clarity
 
 ---
 
@@ -8,19 +46,42 @@ A local crypto market analysis agent that checks the top 50 coins by market cap 
 
 - Fetches **top 50 coins** from CoinGecko (free API, no key needed)
 - Pulls **7-day OHLC data** for each coin
-- Calculates technical indicators:
+- Calculates **advanced technical indicators**:
   - **RSI** (Relative Strength Index — overbought/oversold)
   - **MACD** (momentum & crossover detection)
   - **EMA 7 / EMA 14** (short-term trend direction)
   - **Bollinger Bands** (volatility & breakout zones)
+  - **Ichimoku Cloud** (multi-timeframe analysis)
+  - **ATR, ADX** (volatility and trend strength)
+  - **Williams %R, CCI, Stochastic** (advanced momentum indicators)
   - **Volume Spike** detection
   - **7-day price change %**
+- **Advanced Risk Analysis**:
+  - Kelly Criterion position sizing
+  - Value at Risk (VaR) calculation
+  - Portfolio diversification scoring
+  - Dynamic stop-loss optimization
+- **ML-Enhanced Sentiment Analysis**:
+  - TF-IDF vectorization
+  - Ensemble methods (keyword, TF-IDF, context)
+  - Comprehensive geopolitical risk coverage
+  - Multi-factor confidence scoring
+- **Portfolio Management**:
+  - Portfolio-level risk assessment
+  - Risk metrics calculation
+  - Rebalancing recommendations
+  - Correlation-based diversification
 - Scores each coin from **-100 (strongly bearish) to +100 (strongly bullish)**
 - Classifies into 3 buckets:
   - 🟢 **BUY** — Oversold, bullish signals, positive momentum
   - 🟡 **WATCHLIST** — Neutral, consolidating, potential setups
   - 🔴 **AVOID** — Overbought, bearish signals, downtrend
-- Outputs a **color-coded terminal report** + **JSON export**
+- **Enhanced News Validation**:
+  - ML-powered sentiment analysis
+  - Alignment scoring with technical analysis
+  - Dynamic confidence adjustment
+  - Comprehensive news source integration
+- Outputs a **color-coded terminal report** + **JSON export** + **Portfolio Analysis**
 - Caches data in a local **SQLite database** to avoid repeated API calls
 
 ---
@@ -75,16 +136,21 @@ crypto-agent/
 ├── src/
 │   ├── types.ts                  # TypeScript interfaces
 │   ├── fetcher/
-│   │   └── coingecko.ts          # CoinGecko API client
+│   │   ├── coingecko.ts          # CoinGecko API client
+│   │   └── news.ts               # Free crypto news API integration
 │   ├── database/
 │   │   └── db.ts                 # SQLite caching layer
 │   ├── analyzer/
 │   │   ├── indicators.ts         # RSI, MACD, EMA, Bollinger Bands
-│   │   └── classifier.ts        # Scoring & classification engine
+│   │   ├── advanced-indicators.ts # Ichimoku Cloud, ATR, ADX, Williams %R, CCI, Stochastic
+│   │   ├── risk-management.ts    # Kelly Criterion, VaR, diversification analysis
+│   │   ├── ml-sentiment.ts       # TF-IDF, ensemble methods, advanced keyword matching
+│   │   ├── news-validator.ts     # Validate technical analysis with news sentiment
+│   │   └── classifier.ts         # Scoring & classification engine
 │   ├── output/
-│   │   └── reporter.ts          # Color terminal output + JSON export
+│   │   └── reporter.ts           # Color terminal output + JSON export
 │   ├── index.ts                  # Main entry point
-│   └── scheduler.ts             # Daily cron scheduler
+│   └── scheduler.ts              # Daily cron scheduler
 ├── data/
 │   └── crypto.db                 # SQLite database (auto-created)
 ├── reports/

@@ -64,6 +64,55 @@ export interface NewsValidationResult {
 
 export interface EnhancedCoinAnalysis extends CoinAnalysis {
   newsValidation?: NewsValidationResult;
+  advancedIndicators?: AdvancedIndicators;
+  riskMetrics?: RiskMetrics;
+  portfolioImpact?: PortfolioImpact;
+}
+
+export interface AdvancedIndicators {
+  ichimoku?: IchimokuCloud;
+  atr?: number;
+  adx?: number;
+  williamsR?: number;
+  cci?: number;
+  stochasticOscillator?: StochasticOscillator;
+}
+
+export interface IchimokuCloud {
+  conversionLine: number;
+  baseLine: number;
+  leadingSpanA: number;
+  leadingSpanB: number;
+  laggingSpan: number;
+  cloudTop: number;
+  cloudBottom: number;
+  position: 'above_cloud' | 'below_cloud' | 'in_cloud' | 'cloud_transition';
+}
+
+export interface StochasticOscillator {
+  k: number;
+  d: number;
+  signal: number;
+  position: 'oversold' | 'overbought' | 'neutral';
+}
+
+export interface RiskMetrics {
+  volatility: number;
+  maxDrawdown: number;
+  sharpeRatio: number;
+  var95: number;
+  beta: number;
+  positionSize: number;
+  stopLossLevel: number;
+  takeProfitLevel: number;
+}
+
+export interface PortfolioImpact {
+  correlationWithPortfolio: number;
+  diversificationScore: number;
+  riskContribution: number;
+  expectedReturn: number;
+  optimalWeight: number;
 }
 
 export interface MarketReport {
@@ -72,4 +121,18 @@ export interface MarketReport {
   buyList: EnhancedCoinAnalysis[];
   watchList: EnhancedCoinAnalysis[];
   avoidList: EnhancedCoinAnalysis[];
+  portfolioAnalysis?: PortfolioAnalysis;
+}
+
+export interface PortfolioAnalysis {
+  totalValue: number;
+  diversificationScore: number;
+  overallRisk: 'low' | 'medium' | 'high';
+  expectedReturn: number;
+  recommendedRebalancing: string[];
+  riskMetrics: {
+    portfolioVolatility: number;
+    maxDrawdown: number;
+    sharpeRatio: number;
+  };
 }
