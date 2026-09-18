@@ -1,16 +1,6 @@
 import { NewsService } from '../fetcher/news';
-import { CoinAnalysis } from '../types';
-
-interface NewsValidationResult {
-  coinId: string;
-  coinName: string;
-  recommendation: string;
-  newsSentiment: 'positive' | 'negative' | 'neutral';
-  alignment: 'strong' | 'moderate' | 'weak' | 'conflicting';
-  confidenceScore: number;
-  newsArticles: number;
-  validationNotes: string[];
-}
+import { CoinAnalysis, NewsValidationResult, SignalCategory } from '../types';
+import { POSITIVE_KEYWORDS, NEGATIVE_KEYWORDS, countKeywordMatches } from './sentiment-keywords';
 
 export class NewsValidator {
   public newsService: NewsService;
@@ -43,69 +33,14 @@ export class NewsValidator {
   }
 
   private analyzeSentiment(text: string): 'positive' | 'negative' | 'neutral' {
+    // Shared word-boundary keyword scoring (single source of truth)
     const lowerText = text.toLowerCase();
-    
-    const positiveKeywords = [
-      // Bullish indicators
-      'moon', 'bull', 'surge', 'pump', 'breakout', 'rally',
-      'buy', 'up', 'growth', 'gain', 'win', 'success',
-      
-      // Development & partnerships
-      'launch', 'partnership', 'integration', 'adoption', 'upgrade',
-      'listing', 'exchange', 'support', 'backed', 'investment',
-      'funding', 'capital', 'vc', 'institutional',
-      
-      // Technical improvements
-      'upgrade', 'improvement', 'enhancement', 'optimization',
-      'scalability', 'speed', 'efficiency', 'innovation',
-      
-      // Market sentiment
-      'demand', 'interest', 'popularity', 'trending', 'viral',
-      'hype', 'buzz', 'excitement', 'optimism',
-      
-      // Adoption & utility
-      'payment', 'merchant', 'ecommerce', 'real-world', 'utility',
-      'use-case', 'application', 'product', 'service'
-    ];
-    
-    const negativeKeywords = [
-      // Bearish indicators
-      'bear', 'dump', 'crash', 'plummet', 'sell-off', 'correction',
-      'sell', 'down', 'loss', 'fail',
-      
-      // Security issues
-      'hack', 'exploit', 'bug', 'vulnerability', 'security',
-      'breach', 'theft', 'fraud', 'scam', 'phishing',
-      
-      // Regulatory issues
-      'regulation', 'ban', 'prohibit', 'restrict', 'legal',
-      'lawsuit', 'investigation', 'compliance', 'warning',
-      
-      // Technical problems
-      'outage', 'downtime', 'error', 'failure', 'crash',
-      'slow', 'lag', 'performance', 'issue', 'problem',
-      
-      // Market concerns
-      'fud', 'fear', 'uncertainty', 'doubt', 'panic', 'concern',
-      'risk', 'danger', 'warning', 'caution',
-      
-      // Team & governance issues
-      'team', 'founder', 'ceo', 'leadership', 'management',
-      'resign', 'quit', 'leave', 'scandal', 'controversy',
-      
-      // Geopolitical risks
-      'war', 'conflict', 'tension', 'sanction', 'tariff',
-      'trade war', 'geopolitical', 'invasion', 'military',
-      'escalation', 'crisis', 'instability', 'turmoil',
-      'embargo', 'blockade', 'political', 'election',
-      'protest', 'unrest', 'strike', 'shutdown'
-    ];
-    
-    if (positiveKeywords.some(word => lowerText.includes(word))) {
-      return 'positive';
-    } else if (negativeKeywords.some(word => lowerText.includes(word))) {
-      return 'negative';
-    }
+
+    const positiveMatches = countKeywordMatches(lowerText, POSITIVE_KEYWORDS);
+    const negativeMatches = countKeywordMatches(lowerText, NEGATIVE_KEYWORDS);
+
+    if (positiveMatches > negativeMatches) return 'positive';
+    if (negativeMatches > positiveMatches) return 'negative';
     return 'neutral';
   }
 
@@ -138,33 +73,44 @@ export class NewsValidator {
     return 'neutral';
   }
 
-  private calculateAlignment(recommendation: string, newsSentiment: string): 
+  private calculateAlignment(recommendation: SignalCategory, newsSentiment: string):
     'strong' | 'moderate' | 'weak' | 'conflicting' {
-    const recommendationMap: Record<string, string[]> = {
-      'strong buy': ['positive'],
-      'buy': ['positive', 'neutral'],
-      'hold': ['neutral'],
-      'sell': ['negative', 'neutral'],
-      'strong sell': ['negative']
+    // Fully aligned: the technical call matches the news sentiment direction
+    const aligned: Record<SignalCategory, string[]> = {
+      BUY: ['positive'],
+      WATCHLIST: ['neutral'],
+      AVOID: ['negative'],
     };
 
-    if (recommendationMap[recommendation]?.includes(newsSentiment)) {
-      return 'strong';
-    } else if (newsSentiment === 'neutral') {
-      return 'moderate';
-    } else if (recommendation === 'hold' && newsSentiment !== 'neutral') {
-      return 'weak';
-    }
+    // Partially aligned: no contradiction, but not a direct match
+    const partiallyAligned: Record<SignalCategory, string[]> = {
+      BUY: ['neutral'],
+      WATCHLIST: ['positive', 'negative'],
+      AVOID: ['neutral'],
+    };
 
+    if (aligned[recommendation]?.includes(newsSentiment)) {
+      return 'strong';
+    }
+    if (partiallyAligned[recommendation]?.includes(newsSentiment)) {
+      return 'moderate';
+    }
     return 'conflicting';
   }
 
+  /**
+   * Base confidence derived from technical signal strength (score ±100).
+   */
+  private baseConfidence(analysis: CoinAnalysis): number {
+    return 0.6 + Math.min(0.2, Math.abs(analysis.score) / 250);
+  }
+
   private calculateConfidenceScore(
-    analysis: any, 
-    articles: any[], 
+    analysis: CoinAnalysis,
+    articles: any[],
     newsSentiment: string
   ): number {
-    const baseScore = analysis.confidenceScore || 0.7;
+    const baseScore = this.baseConfidence(analysis);
     const newsImpact = articles.length > 0 ? 0.2 : 0;
     const sentimentBonus = newsSentiment === 'neutral' ? 0 : 0.1;
 
@@ -172,8 +118,8 @@ export class NewsValidator {
   }
 
   private generateValidationNotes(
-    analysis: any, 
-    articles: any[], 
+    analysis: CoinAnalysis,
+    articles: any[],
     newsSentiment: string
   ): string[] {
     const notes: string[] = [];
@@ -185,8 +131,8 @@ export class NewsValidator {
       notes.push(`Overall news sentiment: ${newsSentiment}`);
     }
 
-    notes.push(`Original recommendation confidence: ${(analysis.confidenceScore || 0.7) * 100}%`);
-    notes.push(`Adjusted confidence with news context: ${this.calculateConfidenceScore(analysis, articles, newsSentiment) * 100}%`);
+    notes.push(`Original recommendation confidence: ${Math.round(this.baseConfidence(analysis) * 100)}%`);
+    notes.push(`Adjusted confidence with news context: ${Math.round(this.calculateConfidenceScore(analysis, articles, newsSentiment) * 100)}%`);
 
     return notes;
   }

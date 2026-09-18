@@ -4,9 +4,9 @@ import { analyzeAll } from './analyzer/classifier';
 import { AdvancedIndicatorsCalculator } from './analyzer/advanced-indicators';
 import { RiskManager } from './analyzer/risk-management';
 import { MLSentimentAnalyzer } from './analyzer/ml-sentiment';
+import { NewsService } from './fetcher/news';
 import { printReport, exportReportToJson } from './output/reporter';
-import { MarketReport, CoinAnalysis } from './types';
-import { NewsValidator } from './analyzer/news-validator';
+import { MarketReport, CoinAnalysis, EnhancedCoinAnalysis, NewsValidationResult } from './types';
 import chalk from 'chalk';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
@@ -35,8 +35,9 @@ async function run(): Promise<void> {
   if (!CONFIG.forceRefresh) {
     const cached = loadLatestMarketData();
     if (cached && cached.length > 0) {
-      console.log(chalk.gray(`📂 Using cached data (${cached.length} coins). Use --refresh to fetch fresh data.\n`));
-      coins = cached;
+      // Respect the --limit flag even on cache hits
+      coins = cached.slice(0, CONFIG.topCoinsLimit);
+      console.log(chalk.gray(`📂 Using cached data (${coins.length} coins). Use --refresh to fetch fresh data.\n`));
     }
   }
 
@@ -73,15 +74,19 @@ async function run(): Promise<void> {
   // ─── Calculate risk metrics ─────────────────────────────────────────────────
   console.log(chalk.cyan(`⚠️  Calculating risk metrics and position sizing...`));
   const riskManager = new RiskManager();
+
+  // Use BTC as the market proxy for beta (falls back to 1.0 if absent)
+  const btcCandles = enhancedAnalyses.find((c) => c.coin.id === 'bitcoin')?.coin.ohlcData;
+
   const riskEnhancedAnalyses = enhancedAnalyses.map(coin => ({
     ...coin,
-    riskMetrics: riskManager.calculateRiskMetrics(coin)
+    riskMetrics: riskManager.calculateRiskMetrics(coin, btcCandles)
   }));
 
   // ─── Validate with ML-enhanced news context ─────────────────────────────────
   console.log(chalk.cyan(`🤖 Analyzing news sentiment with ML...`));
-  const newsValidator = new NewsValidator();
-  const mlSentimentAnalyzer = new MLSentimentAnalyzer(newsValidator.newsService);
+  // Share one NewsService instance so its cache is reused across coins
+  const mlSentimentAnalyzer = new MLSentimentAnalyzer(new NewsService());
   const validatedAnalyses = await Promise.all(
     riskEnhancedAnalyses.map(analysis => mlSentimentAnalyzer.analyzeSentimentWithML(analysis))
   );
@@ -94,29 +99,33 @@ async function run(): Promise<void> {
 
   const avoidList = validatedAnalyses
     .filter((a) => a.recommendation === 'AVOID' && a.confidenceScore >= 0.6)
-    .sort((a, b) => a.confidenceScore - b.confidenceScore)
+    .sort((a, b) => b.confidenceScore - a.confidenceScore)
     .slice(0, CONFIG.maxAvoidResults);
 
   const watchList = validatedAnalyses
     .filter((a) => a.recommendation === 'WATCHLIST' || a.confidenceScore < 0.6)
-    .sort((a, b) => b.confidenceScore - (a.confidenceScore || 0))
+    .sort((a, b) => b.confidenceScore - a.confidenceScore)
     .slice(0, CONFIG.maxWatchResults);
 
   // ─── Build enhanced analysis objects ────────────────────────────────────────
-  const enhancedBuyList = buyList.map(a => ({
-    ...analyzed.find(an => an.coin.id === a.coinId)!,
-    newsValidation: a
-  }));
+  // Spread from riskEnhancedAnalyses (NOT the base `analyzed` list) so the
+  // advanced indicators and risk metrics actually reach the report/export.
+  const enhancedById = new Map<string, CoinAnalysis & { advancedIndicators: unknown; riskMetrics: unknown }>(
+    riskEnhancedAnalyses.map((c) => [c.coin.id, c])
+  );
 
-  const enhancedAvoidList = avoidList.map(a => ({
-    ...analyzed.find(an => an.coin.id === a.coinId)!,
-    newsValidation: a
-  }));
+  const withNews = (a: NewsValidationResult): EnhancedCoinAnalysis => ({
+    ...(enhancedById.get(a.coinId) as CoinAnalysis),
+    newsValidation: a,
+  });
 
-  const enhancedWatchList = watchList.map(a => ({
-    ...analyzed.find(an => an.coin.id === a.coinId)!,
-    newsValidation: a
-  }));
+  const enhancedBuyList: EnhancedCoinAnalysis[] = buyList.map(withNews);
+  const enhancedAvoidList: EnhancedCoinAnalysis[] = avoidList.map(withNews);
+  const enhancedWatchList: EnhancedCoinAnalysis[] = watchList.map(withNews);
+
+  // ─── Portfolio-level analysis ────────────────────────────────────────────────
+  console.log(chalk.cyan(`💼 Calculating portfolio-level analysis...`));
+  const portfolioAnalysis = riskManager.calculatePortfolioAnalysis(riskEnhancedAnalyses);
 
   // ─── Build report ───────────────────────────────────────────────────────────
   const report: MarketReport = {
@@ -125,6 +134,7 @@ async function run(): Promise<void> {
     buyList: enhancedBuyList,
     watchList: enhancedWatchList,
     avoidList: enhancedAvoidList,
+    portfolioAnalysis,
   };
 
   // ─── Print enhanced report with news validation ────────────────────────────

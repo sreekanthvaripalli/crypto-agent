@@ -3,8 +3,14 @@ import { CoinMarketData, OHLCCandle } from '../types';
 
 const BASE_URL = 'https://api.coingecko.com/api/v3';
 
+// Optional API key. Set COINGECKO_API_KEY to raise rate limits;
+// COINGECKO_API_TIER selects the header type ('demo' | 'pro').
+const API_KEY = process.env.COINGECKO_API_KEY || '';
+const API_TIER = (process.env.COINGECKO_API_TIER || 'demo').toLowerCase();
+
 // Rate limiter: CoinGecko free tier allows ~10-30 calls/min
-const DELAY_MS = 2000; // 2 seconds between calls
+const DELAY_MS = parseInt(process.env.FETCH_DELAY_MS || '2000', 10);
+const MAX_RETRIES = 3;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -14,8 +20,34 @@ const client: AxiosInstance = axios.create({
   headers: {
     Accept: 'application/json',
     'User-Agent': 'crypto-agent/1.0',
+    ...(API_KEY
+      ? { [API_TIER === 'pro' ? 'x-cg-pro-api-key' : 'x-cg-demo-api-key']: API_KEY }
+      : {}),
   },
 });
+
+/**
+ * GET with retry + exponential backoff on 429 (rate limited).
+ */
+async function getWithRetry(url: string, params?: Record<string, unknown>): Promise<any> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await client.get(url, { params });
+    } catch (err) {
+      lastError = err;
+      const status = (err as { response?: { status?: number } }).response?.status;
+      if (status === 429 && attempt < MAX_RETRIES) {
+        const backoffMs = 60000 * attempt;
+        console.log(`\n⚠️  Rate limited (429). Waiting ${backoffMs / 1000}s before retry ${attempt + 1}/${MAX_RETRIES}...`);
+        await sleep(backoffMs);
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw lastError;
+}
 
 /**
  * Fetch top N coins by market cap with basic market data
@@ -23,7 +55,7 @@ const client: AxiosInstance = axios.create({
 export async function fetchTopCoins(limit: number = 50): Promise<CoinMarketData[]> {
   console.log(`📡 Fetching top ${limit} coins from CoinGecko...`);
 
-  const response = await client.get('/coins/markets', {
+  const response = await getWithRetry('/coins/markets', {
     params: {
       vs_currency: 'usd',
       order: 'market_cap_desc',
@@ -34,7 +66,6 @@ export async function fetchTopCoins(limit: number = 50): Promise<CoinMarketData[
     },
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return response.data.map((coin: any): CoinMarketData => ({
     id: coin.id,
     symbol: coin.symbol.toUpperCase(),
@@ -51,18 +82,20 @@ export async function fetchTopCoins(limit: number = 50): Promise<CoinMarketData[
 }
 
 /**
- * Fetch 7-day OHLC data for a specific coin (CoinGecko returns 4-hourly candles for 7 days)
+ * Fetch 30-day OHLC data for a specific coin.
+ * CoinGecko returns 4-hourly candles for 3-30 day windows (~180 candles),
+ * which is enough history for long-period indicators like Ichimoku (52)
+ * and properly smoothed ADX (2×14).
  */
 export async function fetchOHLC(coinId: string): Promise<OHLCCandle[]> {
-  const response = await client.get(`/coins/${coinId}/ohlc`, {
+  const response = await getWithRetry(`/coins/${coinId}/ohlc`, {
     params: {
       vs_currency: 'usd',
-      days: 7,
+      days: 30,
     },
   });
 
   // Response format: [timestamp, open, high, low, close]
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return response.data.map((candle: any[]): OHLCCandle => ({
     timestamp: candle[0],
     open: candle[1],
@@ -91,21 +124,9 @@ export async function fetchFullMarketData(limit: number = 50): Promise<CoinMarke
       const ohlcData = await fetchOHLC(coin.id);
       fullData.push({ ...coin, ohlcData });
     } catch (err) {
-      const error = err as { response?: { status?: number } };
-      if (error.response?.status === 429) {
-        console.log(`\n⚠️  Rate limited. Waiting 60s before retrying ${coin.symbol}...`);
-        await sleep(60000);
-        try {
-          const ohlcData = await fetchOHLC(coin.id);
-          fullData.push({ ...coin, ohlcData });
-        } catch {
-          console.log(`\n❌ Skipping ${coin.symbol} (failed after retry)`);
-          fullData.push({ ...coin, ohlcData: [] });
-        }
-      } else {
-        console.log(`\n❌ Failed to fetch OHLC for ${coin.symbol}: ${(err as Error).message}`);
-        fullData.push({ ...coin, ohlcData: [] });
-      }
+      // Retries (incl. 429 backoff) already happened inside getWithRetry.
+      console.log(`\n❌ Failed to fetch OHLC for ${coin.symbol}: ${(err as Error).message}`);
+      fullData.push({ ...coin, ohlcData: [] });
     }
   }
 

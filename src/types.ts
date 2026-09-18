@@ -54,9 +54,10 @@ export interface CoinAnalysis {
 export interface NewsValidationResult {
   coinId: string;
   coinName: string;
-  recommendation: string;
+  recommendation: SignalCategory;
   newsSentiment: 'positive' | 'negative' | 'neutral';
   alignment: 'strong' | 'moderate' | 'weak' | 'conflicting';
+  /** 0–1 scale (0.6 = 60%). Producers must normalize to this range. */
   confidenceScore: number;
   newsArticles: number;
   validationNotes: string[];

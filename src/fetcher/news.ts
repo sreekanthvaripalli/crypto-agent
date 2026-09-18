@@ -1,6 +1,7 @@
 import axios from 'axios';
+import { quickSentiment } from '../analyzer/sentiment-keywords';
 
-interface NewsArticle {
+export interface NewsArticle {
   title: string;
   description: string;
   url: string;
@@ -8,7 +9,7 @@ interface NewsArticle {
   sentiment?: 'positive' | 'negative' | 'neutral';
 }
 
-interface CryptoNews {
+export interface CryptoNews {
   articles: NewsArticle[];
   lastUpdated: Date;
 }
@@ -39,7 +40,6 @@ export class NewsService {
         publishedAt: new Date().toISOString(),
         sentiment: this.analyzeSentiment(coin.item.content?.title || '')
       }));
-
       this.cache = {
         articles,
         lastUpdated: new Date()
@@ -57,33 +57,28 @@ export class NewsService {
   }
 
   private analyzeSentiment(text: string): 'positive' | 'negative' | 'neutral' {
-    const positiveKeywords = ['moon', 'bull', 'surge', 'pump', 'breakout', 'rally'];
-    const negativeKeywords = ['bear', 'dump', 'crash', 'plummet', 'sell-off', 'correction'];
-
-    const lowerText = text.toLowerCase();
-
-    if (positiveKeywords.some(word => lowerText.includes(word))) {
-      return 'positive';
-    } else if (negativeKeywords.some(word => lowerText.includes(word))) {
-      return 'negative';
-    }
-
-    return 'neutral';
+    // Shared word-boundary keyword scoring (single source of truth)
+    const result = quickSentiment(text);
+    return result === 1 ? 'positive' : result === -1 ? 'negative' : 'neutral';
   }
 
   async getNewsForCoin(coinId: string): Promise<NewsArticle[]> {
     try {
+      // CoinGecko status updates are project announcements/updates — much
+      // closer to news than /tickers, which only contains exchange pair data.
       const response = await axios.get(
-        `https://api.coingecko.com/api/v3/coins/${coinId}/tickers`
+        `https://api.coingecko.com/api/v3/coins/${coinId}/status_updates`,
+        { params: { per_page: 5 } }
       );
-      const tickersData = response.data as any;
+      const updates = response.data as any[];
+      if (!Array.isArray(updates)) return [];
 
-      return tickersData.tickers.slice(0, 5).map((ticker: any) => ({
-        title: ticker.base,
-        description: ticker.target + ' ' + ticker.last,
-        url: ticker.target_url,
-        publishedAt: ticker.last_traded_at,
-        sentiment: this.analyzeSentiment(ticker.base)
+      return updates.map((update: any) => ({
+        title: update.title || update.project?.name || 'Project update',
+        description: update.description || '',
+        url: update.project?.web_url || `https://www.coingecko.com/en/coins/${coinId}`,
+        publishedAt: update.created_at || new Date().toISOString(),
+        sentiment: this.analyzeSentiment(`${update.title || ''} ${update.description || ''}`)
       }));
     } catch (error) {
       console.error('Error fetching news for coin:', error);

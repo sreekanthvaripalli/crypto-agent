@@ -2,9 +2,18 @@ import fs from 'fs';
 import path from 'path';
 import { CoinMarketData } from '../types';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-const CACHE_FILE = path.join(DATA_DIR, 'market-cache.json');
+function dataDir(): string {
+  // Resolved lazily so tests (and callers) can redirect via env var
+  return process.env.CRYPTO_AGENT_DATA_DIR || path.join(process.cwd(), 'data');
+}
+
+function cacheFile(): string {
+  return path.join(dataDir(), 'market-cache.json');
+}
+
 const MAX_AGE_MS = 4 * 60 * 60 * 1000; // 4 hours
+const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // keep snapshots for 7 days
+const MAX_ENTRIES = 12; // hard cap so the cache file stays small
 
 interface CacheEntry {
   fetchedAt: number;
@@ -16,18 +25,18 @@ interface CacheStore {
 }
 
 function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fs.existsSync(dataDir())) {
+    fs.mkdirSync(dataDir(), { recursive: true });
   }
 }
 
 function loadCache(): CacheStore {
   ensureDataDir();
-  if (!fs.existsSync(CACHE_FILE)) {
+  if (!fs.existsSync(cacheFile())) {
     return { entries: [] };
   }
   try {
-    const raw = fs.readFileSync(CACHE_FILE, 'utf-8');
+    const raw = fs.readFileSync(cacheFile(), 'utf-8');
     return JSON.parse(raw) as CacheStore;
   } catch {
     return { entries: [] };
@@ -36,7 +45,7 @@ function loadCache(): CacheStore {
 
 function saveCache(store: CacheStore): void {
   ensureDataDir();
-  fs.writeFileSync(CACHE_FILE, JSON.stringify(store, null, 2), 'utf-8');
+  fs.writeFileSync(cacheFile(), JSON.stringify(store, null, 2), 'utf-8');
 }
 
 /**
@@ -48,9 +57,9 @@ export function saveMarketData(coins: CoinMarketData[]): void {
 
   store.entries.push({ fetchedAt: now, coins });
 
-  // Keep only last 30 days of entries to avoid unbounded growth
-  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
-  store.entries = store.entries.filter((e) => e.fetchedAt >= thirtyDaysAgo);
+  // Keep only recent snapshots (retention window + hard entry cap)
+  const cutoff = now - RETENTION_MS;
+  store.entries = store.entries.filter((e) => e.fetchedAt >= cutoff).slice(-MAX_ENTRIES);
 
   saveCache(store);
   console.log(`💾 Saved ${coins.length} coins to local cache.`);
@@ -78,8 +87,8 @@ export function loadLatestMarketData(): CoinMarketData[] | null {
 export function cleanOldData(): void {
   const store = loadCache();
   const before = store.entries.length;
-  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  store.entries = store.entries.filter((e) => e.fetchedAt >= thirtyDaysAgo);
+  const cutoff = Date.now() - RETENTION_MS;
+  store.entries = store.entries.filter((e) => e.fetchedAt >= cutoff).slice(-MAX_ENTRIES);
   const removed = before - store.entries.length;
   if (removed > 0) {
     saveCache(store);

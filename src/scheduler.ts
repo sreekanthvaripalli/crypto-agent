@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { exec } from 'child_process';
+import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
 
@@ -8,13 +9,21 @@ import chalk from 'chalk';
 // Cron format: 'minute hour day-of-month month day-of-week'
 const SCHEDULE = process.env.CRON_SCHEDULE || '0 8 * * *';
 
-const AGENT_SCRIPT = path.join(__dirname, 'index.ts');
+// Prefer the compiled dist/index.js when the scheduler itself runs compiled
+// (node dist/scheduler.js); fall back to ts-node for source runs.
+const compiledScript = path.join(__dirname, 'index.js');
+const sourceScript = path.join(__dirname, 'index.ts');
+const runningCompiled =
+  __dirname.replace(/\\/g, '/').includes('/dist') && fs.existsSync(compiledScript);
+
+const AGENT_SCRIPT = runningCompiled ? compiledScript : sourceScript;
+const AGENT_CMD = runningCompiled ? `node "${AGENT_SCRIPT}"` : `npx ts-node "${AGENT_SCRIPT}"`;
 
 function runAgent(): void {
   const timestamp = new Date().toLocaleString();
   console.log(chalk.cyan(`\n⏰ [${timestamp}] Scheduled run triggered...\n`));
 
-  const cmd = `npx ts-node "${AGENT_SCRIPT}" --refresh`;
+  const cmd = `${AGENT_CMD} --refresh`;
 
   const child = exec(cmd, { cwd: process.cwd() });
 

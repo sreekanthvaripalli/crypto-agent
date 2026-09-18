@@ -1,6 +1,6 @@
 import chalk, { ChalkInstance } from 'chalk';
 import Table from 'cli-table3';
-import { CoinAnalysis, MarketReport } from '../types';
+import { CoinAnalysis, MarketReport, EnhancedCoinAnalysis, PortfolioAnalysis } from '../types';
 import fs from 'fs';
 import path from 'path';
 
@@ -125,6 +125,30 @@ function printSection(
 }
 
 /**
+ * Print portfolio-level analysis section
+ */
+function printPortfolioSection(portfolio: PortfolioAnalysis): void {
+  console.log('\n' + chalk.cyan(DIVIDER));
+  console.log(chalk.cyan('💼  PORTFOLIO-LEVEL ANALYSIS'));
+  console.log(chalk.cyan(DIVIDER));
+
+  console.log(`  Combined market cap of analyzed coins: ${formatPrice(portfolio.totalValue)}`);
+  console.log(`  Diversification score:             ${(portfolio.diversificationScore * 100).toFixed(1)}%`);
+  console.log(`  Overall risk level:                ${portfolio.overallRisk.toUpperCase()}`);
+  console.log(`  Expected return (momentum-based):  ${formatPercent(portfolio.expectedReturn * 100)}`);
+  console.log(`  Portfolio volatility (annualized): ${(portfolio.riskMetrics.portfolioVolatility * 100).toFixed(2)}%`);
+  console.log(`  Portfolio max drawdown:            ${(portfolio.riskMetrics.maxDrawdown * 100).toFixed(2)}%`);
+  console.log(`  Portfolio Sharpe ratio:            ${portfolio.riskMetrics.sharpeRatio.toFixed(2)}`);
+
+  if (portfolio.recommendedRebalancing.length > 0) {
+    console.log(chalk.yellow('\n  🔧 Rebalancing suggestions:'));
+    for (const rec of portfolio.recommendedRebalancing.slice(0, 8)) {
+      console.log(chalk.yellow(`     • ${rec}`));
+    }
+  }
+}
+
+/**
  * Print the full market report to terminal
  */
 export function printReport(report: MarketReport): void {
@@ -165,6 +189,11 @@ export function printReport(report: MarketReport): void {
     true
   );
 
+  // Portfolio-level analysis (when available)
+  if (report.portfolioAnalysis) {
+    printPortfolioSection(report.portfolioAnalysis);
+  }
+
   // Footer summary
   console.log('\n' + chalk.gray(DIVIDER));
   console.log(chalk.gray(`  Summary: `));
@@ -193,13 +222,14 @@ export function exportReportToJson(report: MarketReport): string {
     buyList: report.buyList.map(summarizeCoin),
     watchList: report.watchList.map(summarizeCoin),
     avoidList: report.avoidList.map(summarizeCoin),
+    portfolioAnalysis: report.portfolioAnalysis,
   };
 
   fs.writeFileSync(filePath, JSON.stringify(jsonData, null, 2));
   return filePath;
 }
 
-function summarizeCoin(a: CoinAnalysis) {
+function summarizeCoin(a: EnhancedCoinAnalysis) {
   return {
     symbol: a.coin.symbol,
     name: a.coin.name,
@@ -213,5 +243,24 @@ function summarizeCoin(a: CoinAnalysis) {
     bbPosition: a.indicators.bollingerBands.position,
     volumeSpike: a.indicators.volumeSpike,
     signals: a.signals,
+    newsValidation: a.newsValidation
+      ? {
+          sentiment: a.newsValidation.newsSentiment,
+          alignment: a.newsValidation.alignment,
+          confidence: a.newsValidation.confidenceScore,
+          articles: a.newsValidation.newsArticles,
+        }
+      : undefined,
+    riskMetrics: a.riskMetrics,
+    advancedIndicators: a.advancedIndicators
+      ? {
+          atr: a.advancedIndicators.atr,
+          adx: a.advancedIndicators.adx,
+          williamsR: a.advancedIndicators.williamsR,
+          cci: a.advancedIndicators.cci,
+          ichimokuPosition: a.advancedIndicators.ichimoku?.position,
+          stochastic: a.advancedIndicators.stochasticOscillator?.position,
+        }
+      : undefined,
   };
 }

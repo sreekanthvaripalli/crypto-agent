@@ -1,4 +1,4 @@
-import { EnhancedCoinAnalysis, AdvancedIndicators, IchimokuCloud, StochasticOscillator } from '../types';
+import { EnhancedCoinAnalysis, AdvancedIndicators, IchimokuCloud, StochasticOscillator, OHLCCandle } from '../types';
 
 /**
  * Calculate advanced technical indicators for enhanced analysis
@@ -6,36 +6,42 @@ import { EnhancedCoinAnalysis, AdvancedIndicators, IchimokuCloud, StochasticOsci
 export class AdvancedIndicatorsCalculator {
   
   /**
-   * Calculate Ichimoku Cloud indicators
+   * Calculate Ichimoku Cloud indicators using candle highs/lows (standard periods).
+   * Requires at least 52 candles for Senkou Span B.
    */
-  calculateIchimokuCloud(candles: number[]): IchimokuCloud {
+  calculateIchimokuCloud(candles: OHLCCandle[]): IchimokuCloud {
     if (candles.length < 52) {
       return this.getEmptyIchimoku();
     }
+
+    const highs = candles.map((c) => c.high);
+    const lows = candles.map((c) => c.low);
+    const closes = candles.map((c) => c.close);
 
     // Standard Ichimoku periods
     const conversionPeriod = 9;
     const basePeriod = 26;
     const spanBPeriod = 52;
 
-    // Calculate Conversion Line (Tenkan-sen)
-    const conversionLine = this.calculateLine(candles, conversionPeriod);
+    // Conversion Line (Tenkan-sen) and Base Line (Kijun-sen)
+    const conversionLine = this.periodMidpoint(highs, lows, conversionPeriod);
+    const baseLine = this.periodMidpoint(highs, lows, basePeriod);
 
-    // Calculate Base Line (Kijun-sen)
-    const baseLine = this.calculateLine(candles, basePeriod);
-
-    // Calculate Leading Span A (Senkou Span A)
+    // Leading Span A (Senkou Span A) = (conversion + base) / 2
     const leadingSpanA = (conversionLine + baseLine) / 2;
 
-    // Calculate Leading Span B (Senkou Span B)
-    const leadingSpanB = this.calculateLine(candles, spanBPeriod);
+    // Leading Span B (Senkou Span B) = midpoint of the last 52 periods
+    const leadingSpanB = this.periodMidpoint(highs, lows, spanBPeriod);
 
-    // Calculate Cloud boundaries
+    // Cloud boundaries
     const cloudTop = Math.max(leadingSpanA, leadingSpanB);
     const cloudBottom = Math.min(leadingSpanA, leadingSpanB);
 
-    // Determine position relative to cloud
-    const currentPrice = candles[candles.length - 1];
+    // Lagging Span (Chikou): current close plotted 26 periods back
+    const laggingSpan = closes[Math.max(0, closes.length - 1 - 26)];
+
+    // Position relative to cloud
+    const currentPrice = closes[closes.length - 1];
     const position = this.determineCloudPosition(currentPrice, cloudTop, cloudBottom);
 
     return {
@@ -43,7 +49,7 @@ export class AdvancedIndicatorsCalculator {
       baseLine,
       leadingSpanA,
       leadingSpanB,
-      laggingSpan: currentPrice, // Simplified - would need future projection
+      laggingSpan,
       cloudTop,
       cloudBottom,
       position
@@ -66,51 +72,72 @@ export class AdvancedIndicatorsCalculator {
   }
 
   /**
-   * Calculate Average Directional Index (ADX)
+   * Calculate Average Directional Index (ADX) with Wilder smoothing.
+   * ADX = Wilder MA of DX over `period`; needs ~2×period candles.
    */
-  calculateADX(candles: { high: number; low: number; close: number }[], period: number = 14): number {
-    if (candles.length < period + 1) return 0;
+  calculateADX(candles: OHLCCandle[], period: number = 14): number {
+    if (candles.length < period * 2) return 0;
 
     const trValues: number[] = [];
     const plusDMValues: number[] = [];
     const minusDMValues: number[] = [];
 
     for (let i = 1; i < candles.length; i++) {
-      const tr = this.calculateTrueRange(candles[i], candles[i - 1]);
-      const plusDM = this.calculatePlusDM(candles[i], candles[i - 1]);
-      const minusDM = this.calculateMinusDM(candles[i], candles[i - 1]);
-
-      trValues.push(tr);
-      plusDMValues.push(plusDM);
-      minusDMValues.push(minusDM);
+      trValues.push(this.calculateTrueRange(candles[i], candles[i - 1]));
+      plusDMValues.push(this.calculatePlusDM(candles[i], candles[i - 1]));
+      minusDMValues.push(this.calculateMinusDM(candles[i], candles[i - 1]));
     }
 
-    // Calculate smoothed values
-    const smoothedTR = this.smoothValues(trValues, period);
-    const smoothedPlusDM = this.smoothValues(plusDMValues, period);
-    const smoothedMinusDM = this.smoothValues(minusDMValues, period);
+    // Wilder smoothing: first value = simple sum, then recursive smoothing
+    const wilderSmooth = (values: number[]): number[] => {
+      const out: number[] = [];
+      let prev = values.slice(0, period).reduce((s, v) => s + v, 0);
+      out.push(prev);
+      for (let i = period; i < values.length; i++) {
+        prev = prev - prev / period + values[i];
+        out.push(prev);
+      }
+      return out;
+    };
 
-    // Calculate DI+ and DI-
-    const diPlus = (smoothedPlusDM / smoothedTR) * 100;
-    const diMinus = (smoothedMinusDM / smoothedTR) * 100;
+    const smoothedTR = wilderSmooth(trValues);
+    const smoothedPlusDM = wilderSmooth(plusDMValues);
+    const smoothedMinusDM = wilderSmooth(minusDMValues);
 
-    // Calculate DX and ADX
-    const dx = Math.abs(diPlus - diMinus) / (diPlus + diMinus) * 100;
-    
-    // Simple ADX calculation (would be smoothed in practice)
-    return dx;
+    // DX series
+    const dx: number[] = [];
+    for (let i = 0; i < smoothedTR.length; i++) {
+      if (smoothedTR[i] === 0) {
+        dx.push(0);
+        continue;
+      }
+      const diPlus = (smoothedPlusDM[i] / smoothedTR[i]) * 100;
+      const diMinus = (smoothedMinusDM[i] / smoothedTR[i]) * 100;
+      const sum = diPlus + diMinus;
+      dx.push(sum === 0 ? 0 : (Math.abs(diPlus - diMinus) / sum) * 100);
+    }
+
+    if (dx.length < period) return dx.length > 0 ? dx[dx.length - 1] : 0;
+
+    // ADX = Wilder MA of DX
+    let adx = dx.slice(0, period).reduce((s, v) => s + v, 0) / period;
+    for (let i = period; i < dx.length; i++) {
+      adx = (adx * (period - 1) + dx[i]) / period;
+    }
+
+    return adx;
   }
 
   /**
-   * Calculate Williams %R
+   * Calculate Williams %R using candle highs/lows.
    */
-  calculateWilliamsR(candles: number[], period: number = 14): number {
+  calculateWilliamsR(candles: OHLCCandle[], period: number = 14): number {
     if (candles.length < period) return -50; // Neutral
 
     const recentCandles = candles.slice(-period);
-    const highestHigh = Math.max(...recentCandles);
-    const lowestLow = Math.min(...recentCandles);
-    const currentClose = candles[candles.length - 1];
+    const highestHigh = Math.max(...recentCandles.map((c) => c.high));
+    const lowestLow = Math.min(...recentCandles.map((c) => c.low));
+    const currentClose = recentCandles[recentCandles.length - 1].close;
 
     if (highestHigh === lowestLow) return -50;
 
@@ -118,13 +145,13 @@ export class AdvancedIndicatorsCalculator {
   }
 
   /**
-   * Calculate Commodity Channel Index (CCI)
+   * Calculate Commodity Channel Index (CCI) using typical price (H+L+C)/3.
    */
-  calculateCCI(candles: number[], period: number = 14): number {
+  calculateCCI(candles: OHLCCandle[], period: number = 14): number {
     if (candles.length < period) return 0;
 
     const recentCandles = candles.slice(-period);
-    const typicalPrices = recentCandles.map(c => c); // Simplified - would use (H+L+C)/3
+    const typicalPrices = recentCandles.map((c) => (c.high + c.low + c.close) / 3);
     const sma = typicalPrices.reduce((a, b) => a + b, 0) / period;
     const meanDeviation = this.calculateMeanDeviation(typicalPrices, sma);
 
@@ -135,30 +162,32 @@ export class AdvancedIndicatorsCalculator {
   }
 
   /**
-   * Calculate Stochastic Oscillator
+   * Calculate Stochastic Oscillator with a real %K series,
+   * %D = SMA(%K, dPeriod) and signal = SMA(%D, dPeriod).
    */
-  calculateStochasticOscillator(candles: { high: number; low: number; close: number }[], kPeriod: number = 14, dPeriod: number = 3): StochasticOscillator {
-    if (candles.length < kPeriod) {
+  calculateStochasticOscillator(candles: OHLCCandle[], kPeriod: number = 14, dPeriod: number = 3): StochasticOscillator {
+    if (candles.length < kPeriod + dPeriod) {
       return { k: 50, d: 50, signal: 50, position: 'neutral' };
     }
 
-    const recentCandles = candles.slice(-kPeriod);
-    const highestHigh = Math.max(...recentCandles.map(c => c.high));
-    const lowestLow = Math.min(...recentCandles.map(c => c.low));
-    const currentClose = candles[candles.length - 1].close;
-
-    if (highestHigh === lowestLow) {
-      return { k: 50, d: 50, signal: 50, position: 'neutral' };
+    // %K series across the whole window
+    const kSeries: number[] = [];
+    for (let i = kPeriod - 1; i < candles.length; i++) {
+      const window = candles.slice(i - kPeriod + 1, i + 1);
+      const highestHigh = Math.max(...window.map((c) => c.high));
+      const lowestLow = Math.min(...window.map((c) => c.low));
+      const close = candles[i].close;
+      kSeries.push(
+        highestHigh === lowestLow ? 50 : ((close - lowestLow) / (highestHigh - lowestLow)) * 100
+      );
     }
 
-    const k = ((currentClose - lowestLow) / (highestHigh - lowestLow)) * 100;
-    
-    // Calculate D (moving average of K)
-    const d = this.calculateSMA([k], dPeriod);
-    
-    // Calculate Signal line (moving average of D)
-    const signal = this.calculateSMA([d], dPeriod);
+    const dSeries = this.rollingSMA(kSeries, dPeriod);
+    const signalSeries = this.rollingSMA(dSeries, dPeriod);
 
+    const k = kSeries[kSeries.length - 1];
+    const d = dSeries[dSeries.length - 1] ?? k;
+    const signal = signalSeries[signalSeries.length - 1] ?? d;
     const position = this.determineStochasticPosition(k);
 
     return { k, d, signal, position };
@@ -168,14 +197,13 @@ export class AdvancedIndicatorsCalculator {
    * Calculate all advanced indicators for a coin
    */
   calculateAllAdvancedIndicators(coin: EnhancedCoinAnalysis): AdvancedIndicators {
-    const closes = coin.coin.ohlcData.map(c => c.close);
     const candles = coin.coin.ohlcData;
 
     const advancedIndicators: AdvancedIndicators = {};
 
-    // Ichimoku Cloud
-    if (closes.length >= 52) {
-      advancedIndicators.ichimoku = this.calculateIchimokuCloud(closes);
+    // Ichimoku Cloud (needs 52 candles — satisfied by 30-day 4-hourly data)
+    if (candles.length >= 52) {
+      advancedIndicators.ichimoku = this.calculateIchimokuCloud(candles);
     }
 
     // ATR
@@ -183,23 +211,23 @@ export class AdvancedIndicatorsCalculator {
       advancedIndicators.atr = this.calculateATR(candles);
     }
 
-    // ADX
-    if (candles.length >= 15) {
+    // ADX (needs ~2× period candles for Wilder smoothing)
+    if (candles.length >= 28) {
       advancedIndicators.adx = this.calculateADX(candles);
     }
 
     // Williams %R
-    if (closes.length >= 14) {
-      advancedIndicators.williamsR = this.calculateWilliamsR(closes);
+    if (candles.length >= 14) {
+      advancedIndicators.williamsR = this.calculateWilliamsR(candles);
     }
 
     // CCI
-    if (closes.length >= 14) {
-      advancedIndicators.cci = this.calculateCCI(closes);
+    if (candles.length >= 14) {
+      advancedIndicators.cci = this.calculateCCI(candles);
     }
 
     // Stochastic Oscillator
-    if (candles.length >= 14) {
+    if (candles.length >= 17) {
       advancedIndicators.stochasticOscillator = this.calculateStochasticOscillator(candles);
     }
 
@@ -208,11 +236,22 @@ export class AdvancedIndicatorsCalculator {
 
   // Helper methods
 
-  private calculateLine(candles: number[], period: number): number {
-    const recentCandles = candles.slice(-period);
-    const highestHigh = Math.max(...recentCandles);
-    const lowestLow = Math.min(...recentCandles);
-    return (highestHigh + lowestLow) / 2;
+  /**
+   * Midpoint of the highest high and lowest low over the last `period` candles.
+   */
+  private periodMidpoint(highs: number[], lows: number[], period: number): number {
+    const recentHighs = highs.slice(-period);
+    const recentLows = lows.slice(-period);
+    return (Math.max(...recentHighs) + Math.min(...recentLows)) / 2;
+  }
+
+  private rollingSMA(values: number[], period: number): number[] {
+    const out: number[] = [];
+    for (let i = period - 1; i < values.length; i++) {
+      const window = values.slice(i - period + 1, i + 1);
+      out.push(window.reduce((s, v) => s + v, 0) / period);
+    }
+    return out;
   }
 
   private determineCloudPosition(price: number, cloudTop: number, cloudBottom: number): 'above_cloud' | 'below_cloud' | 'in_cloud' | 'cloud_transition' {
@@ -240,19 +279,9 @@ export class AdvancedIndicatorsCalculator {
     return downMove > upMove && downMove > 0 ? downMove : 0;
   }
 
-  private smoothValues(values: number[], period: number): number {
-    if (values.length === 0) return 0;
-    return values.reduce((sum, val) => sum + val, 0) / values.length;
-  }
-
   private calculateMeanDeviation(values: number[], mean: number): number {
     const deviations = values.map(val => Math.abs(val - mean));
     return deviations.reduce((sum, dev) => sum + dev, 0) / values.length;
-  }
-
-  private calculateSMA(values: number[], period: number): number {
-    if (values.length === 0) return 0;
-    return values.reduce((sum, val) => sum + val, 0) / values.length;
   }
 
   private determineStochasticPosition(k: number): 'oversold' | 'overbought' | 'neutral' {

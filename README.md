@@ -45,7 +45,7 @@ A professional-grade crypto market analysis agent that checks the top 50 coins b
 ## 📊 What It Does
 
 - Fetches **top 50 coins** from CoinGecko (free API, no key needed)
-- Pulls **7-day OHLC data** for each coin
+- Pulls **30-day OHLC data** for each coin (4-hourly candles — enough history for long-period indicators like Ichimoku and smoothed ADX)
 - Calculates **advanced technical indicators**:
   - **RSI** (Relative Strength Index — overbought/oversold)
   - **MACD** (momentum & crossover detection)
@@ -89,7 +89,7 @@ A professional-grade crypto market analysis agent that checks the top 50 coins b
 ## 🚀 Getting Started
 
 ### Prerequisites
-- Node.js (v18+)
+- Node.js (v20.19+ — required for chalk v5 ESM compatibility)
 - npm
 
 ### Installation
@@ -99,8 +99,30 @@ npm install
 
 ### Run the Agent
 ```bash
-# Run analysis (uses cached data if available within 24h)
+# Run analysis (uses cached data if available within 4h)
 npm run dev
+
+# Force fresh data fetch from CoinGecko
+npm run dev -- --refresh
+
+# Analyze top 100 coins instead of 50
+npm run dev -- --limit=100
+
+# Skip JSON export
+npm run dev -- --no-json
+
+# Combine options
+npm run dev -- --refresh --limit=100
+```
+
+### Configuration (Environment Variables)
+| Variable | Default | Description |
+|---|---|---|
+| `COINGECKO_API_KEY` | _(none)_ | CoinGecko demo/pro API key — raises rate limits (recommended) |
+| `COINGECKO_API_TIER` | `demo` | Key type: `demo` (`x-cg-demo-api-key`) or `pro` (`x-cg-pro-api-key`) |
+| `FETCH_DELAY_MS` | `2000` | Delay between CoinGecko calls (rate limiting) |
+| `CRYPTO_AGENT_DATA_DIR` | `./data` | Where the market cache JSON is stored |
+| `CRON_SCHEDULE` | `0 8 * * *` | Scheduler cron expression |
 
 # Force fresh data fetch from CoinGecko
 npm run dev -- --refresh
@@ -129,6 +151,18 @@ CRON_SCHEDULE="0 * * * *" npm run schedule
 
 ---
 
+## 🛠️ Development
+
+```bash
+npm test          # Build + run the test suite (Node built-in test runner)
+npm run lint      # ESLint (flat config)
+npm run build     # Compile to dist/
+```
+
+Tests cover the indicators, advanced indicators (ADX smoothing, Stochastic %D, Ichimoku), risk math (Sharpe/VaR/beta/Kelly/drawdown), the sentiment keyword matching, the classifier, and the cache layer — including a regression test for the empty-OHLC crash. CI (GitHub Actions) runs lint + tests on every push/PR.
+
+---
+
 ## 📁 Project Structure
 
 ```
@@ -136,25 +170,25 @@ crypto-agent/
 ├── src/
 │   ├── types.ts                  # TypeScript interfaces
 │   ├── fetcher/
-│   │   ├── coingecko.ts          # CoinGecko API client
-│   │   └── news.ts               # Free crypto news API integration
+│   │   ├── coingecko.ts          # CoinGecko API client (API key, retry/backoff)
+│   │   └── news.ts               # Trending coins + project status updates
 │   ├── database/
-│   │   └── db.ts                 # SQLite caching layer
+│   │   └── db.ts                 # JSON-file caching layer (retention + entry cap)
 │   ├── analyzer/
 │   │   ├── indicators.ts         # RSI, MACD, EMA, Bollinger Bands
 │   │   ├── advanced-indicators.ts # Ichimoku Cloud, ATR, ADX, Williams %R, CCI, Stochastic
-│   │   ├── risk-management.ts    # Kelly Criterion, VaR, diversification analysis
-│   │   ├── ml-sentiment.ts       # TF-IDF, ensemble methods, advanced keyword matching
+│   │   ├── risk-management.ts    # Kelly Criterion, VaR, Sharpe, beta, portfolio analysis
+│   │   ├── ml-sentiment.ts       # TF-IDF + ensemble sentiment scoring
 │   │   ├── news-validator.ts     # Validate technical analysis with news sentiment
+│   │   ├── sentiment-keywords.ts # Shared keyword lists + word-boundary matching
 │   │   └── classifier.ts         # Scoring & classification engine
 │   ├── output/
-│   │   └── reporter.ts           # Color terminal output + JSON export
+│   │   └── reporter.ts           # Color terminal output + JSON export (incl. portfolio)
+│   ├── __tests__/                # Node built-in test runner suite
 │   ├── index.ts                  # Main entry point
-│   └── scheduler.ts              # Daily cron scheduler
-├── data/
-│   └── crypto.db                 # SQLite database (auto-created)
-├── reports/
-│   └── report-*.json            # JSON reports (auto-created)
+│   └── scheduler.ts              # Cron scheduler (works from source and dist)
+├── data/                         # market-cache.json (auto-created, gitignored)
+├── reports/                      # report-*.json (auto-created, gitignored)
 └── package.json
 ```
 
