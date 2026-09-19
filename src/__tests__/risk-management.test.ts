@@ -212,6 +212,18 @@ test('bullish coins get tighter stops than bearish ones (confidence adjustment)'
   assert.ok(bull >= 0.05 && bear <= 0.5);
 });
 
+test('trailing stop level is bounded when history is sufficient', () => {
+  const candles = makeCandles(180, (i) => 100 * Math.pow(1.001, i));
+  const metrics = rm.calculateRiskMetrics(coin(candles));
+  assert.ok(metrics.trailingStopLevel !== undefined);
+  assert.ok(metrics.trailingStopLevel! >= 0 && metrics.trailingStopLevel! <= 0.5);
+});
+
+test('trailing stop is absent without enough history', () => {
+  const metrics = rm.calculateRiskMetrics(coin(makeCandles(20, (i) => 100 + i * 0.1)));
+  assert.equal(metrics.trailingStopLevel, undefined);
+});
+
 test('take-profit maintains the 2:1 risk-reward ratio', () => {
   const metrics = rm.calculateRiskMetrics(coin(makeCandles(180, (i) => 100 + Math.sin(i / 5) * 3)));
   assert.ok(Math.abs(metrics.takeProfitLevel - 2 * metrics.stopLossLevel) < 1e-12);

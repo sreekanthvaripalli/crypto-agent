@@ -37,6 +37,13 @@ before(async () => {
       return;
     }
 
+    if (u.pathname.includes('/market_chart')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      const volumes = Array.from({ length: 721 }, (_, i) => [1787209200000 + i * 3600000, 1000]);
+      res.end(JSON.stringify({ prices: [], total_volumes: volumes }));
+      return;
+    }
+
     if (u.pathname.includes('/ohlc')) {
       // Dedicated route: first call 429s with Retry-After, then always succeeds.
       // (Handled before the days check so the window ladder doesn't interfere.)
@@ -95,6 +102,28 @@ test('OHLC falls back to a shorter window when 30d is rejected with 422', async 
   assert.equal(candles.length, 2);
   assert.equal(candles[0].high, 2);
   assert.equal(candles[1].close, 2);
+});
+
+test('volume history is fetched and bucketed one volume per candle', async () => {
+  const { fetchVolumeHistory, bucketVolumesIntoCandles } = await import('../fetcher/coingecko');
+  const volumes = await fetchVolumeHistory('bitcoin');
+  assert.ok(volumes.length > 0);
+  assert.equal(typeof volumes[0].timestamp, 'number');
+  assert.equal(typeof volumes[0].volume, 'number');
+
+  // 5 four-hourly candles; hourly volumes of 1 → 4 points per bucket
+  const candles = Array.from({ length: 5 }, (_, i) => ({
+    timestamp: 1_700_000_000_000 + i * 4 * 60 * 60 * 1000,
+    open: 1,
+    high: 1,
+    low: 1,
+    close: 1,
+  }));
+  const hourly = Array.from({ length: 20 }, (_, i) => ({
+    timestamp: 1_700_000_000_000 + i * 60 * 60 * 1000,
+    volume: 1,
+  }));
+  assert.deepEqual(bucketVolumesIntoCandles(hourly, candles), [4, 4, 4, 4, 4]);
 });
 
 test('recovers from 429 by honoring the Retry-After header', async () => {

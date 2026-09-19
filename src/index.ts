@@ -6,7 +6,9 @@ import { RiskManager } from './analyzer/risk-management';
 import { MLSentimentAnalyzer } from './analyzer/ml-sentiment';
 import { NewsService } from './fetcher/news';
 import { printReport, exportReportToJson } from './output/reporter';
-import { MarketReport, CoinAnalysis, EnhancedCoinAnalysis, NewsValidationResult } from './types';
+import { MarketReport, CoinAnalysis, EnhancedCoinAnalysis, NewsValidationResult, MarketRegime } from './types';
+import { assessMarketRegime } from './analyzer/market-regime';
+import { loadWeights } from './analyzer/scoring-config';
 import chalk from 'chalk';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
@@ -61,7 +63,33 @@ async function run(): Promise<void> {
 
   // ─── Analyze all coins ──────────────────────────────────────────────────────
   console.log(chalk.cyan(`🔬 Running technical analysis on ${coins.length} coins...`));
-  const analyzed: CoinAnalysis[] = analyzeAll(coins);
+  const weights = loadWeights();
+  const analyzed: CoinAnalysis[] = analyzeAll(coins, weights);
+
+  // ─── BTC market regime gate ─────────────────────────────────────────────────
+  // ~80% of altcoins follow BTC: in a BTC downtrend, BUY picks are demoted
+  // to WATCHLIST no matter how good their individual setups look.
+  const btcCandlesAll = coins.find((c) => c.id === 'bitcoin')?.ohlcData;
+  const regimeAssessment =
+    btcCandlesAll && btcCandlesAll.length >= 50 ? assessMarketRegime(btcCandlesAll) : null;
+  let demotedCount = 0;
+  if (regimeAssessment?.demoteBuys) {
+    for (const analysis of analyzed) {
+      if (analysis.category === 'BUY') {
+        analysis.category = 'WATCHLIST';
+        analysis.signals.push('🚦 BUY demoted — BTC risk-off regime (price below falling EMA20/EMA50)');
+        demotedCount++;
+      }
+    }
+    if (demotedCount > 0) {
+      console.log(
+        chalk.yellow(`🚦 BTC risk-off regime — demoted ${demotedCount} BUY signal(s) to WATCHLIST`)
+      );
+    }
+  }
+  const marketRegime: MarketRegime | undefined = regimeAssessment
+    ? { ...regimeAssessment, demotedCount }
+    : undefined;
 
   // ─── Calculate advanced indicators ──────────────────────────────────────────
   console.log(chalk.cyan(`📈 Calculating advanced technical indicators...`));
@@ -135,6 +163,7 @@ async function run(): Promise<void> {
     watchList: enhancedWatchList,
     avoidList: enhancedAvoidList,
     portfolioAnalysis,
+    marketRegime,
   };
 
   // ─── Print enhanced report with news validation ────────────────────────────

@@ -10,6 +10,8 @@ export interface CoinMarketData {
   priceChange24hPercent: number;
   priceChange7dPercent: number;
   ohlcData: OHLCCandle[];
+  /** Traded volume per candle (aligned 1:1 with ohlcData), when available */
+  candleVolumes?: number[];
 }
 
 export interface OHLCCandle {
@@ -39,6 +41,10 @@ export interface TechnicalIndicators {
   };
   volumeSpike: boolean;
   volumeChangePercent: number;
+  /** Money Flow Index (0-100), only when per-candle volume is available */
+  mfi?: number | null;
+  /** true when volumeSpike was computed from real traded volume, not the price-range proxy */
+  volumeIsReal?: boolean;
 }
 
 export type SignalCategory = 'BUY' | 'WATCHLIST' | 'AVOID';
@@ -106,6 +112,8 @@ export interface RiskMetrics {
   positionSize: number;    // fraction of capital (Kelly-derived)
   stopLossLevel: number;   // fraction below entry (0.08 = -8% stop)
   takeProfitLevel: number; // fraction above entry (2:1 risk-reward)
+  /** Chandelier-exit style trailing stop below current price (fraction) */
+  trailingStopLevel?: number;
 }
 
 export interface PortfolioImpact {
@@ -123,6 +131,18 @@ export interface MarketReport {
   watchList: EnhancedCoinAnalysis[];
   avoidList: EnhancedCoinAnalysis[];
   portfolioAnalysis?: PortfolioAnalysis;
+  /** BTC-driven market regime assessment (when BTC data is available) */
+  marketRegime?: MarketRegime;
+}
+
+export interface MarketRegime {
+  /** risk-off demotes BUY signals to WATCHLIST */
+  regime: 'risk-on' | 'neutral' | 'risk-off';
+  /** % distance of BTC close from its EMA20 (negative = below trend) */
+  btcTrendPct: number;
+  demoteBuys: boolean;
+  /** how many BUY signals were demoted */
+  demotedCount: number;
 }
 
 export interface PortfolioAnalysis {

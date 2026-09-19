@@ -135,6 +135,14 @@ function printSection(
         console.log(
           chalk.green(`     🎯 Take-profit: ${formatPercent(a.riskMetrics.takeProfitLevel * 100)} → exit at ${formatPrice(targetPrice)}`)
         );
+        if (a.riskMetrics.trailingStopLevel !== undefined) {
+          const trailPrice = entry * (1 - a.riskMetrics.trailingStopLevel);
+          console.log(
+            chalk.magenta(
+              `     🔁 Trailing stop: ${formatPercent(-a.riskMetrics.trailingStopLevel * 100)} → exit at ${formatPrice(trailPrice)} (rises with the trend)`
+            )
+          );
+        }
       }
     }
   }
@@ -180,6 +188,19 @@ export function printReport(report: MarketReport): void {
   console.log(chalk.cyan.bold('║') + chalk.gray(`       Generated: ${ts}`.padEnd(70)) + chalk.cyan.bold('║'));
   console.log(chalk.cyan.bold('║') + chalk.gray(`       Coins Analyzed: ${report.totalCoinsAnalyzed}`.padEnd(70)) + chalk.cyan.bold('║'));
   console.log(chalk.cyan.bold('╚' + '═'.repeat(70) + '╝'));
+
+  // Market regime banner (when BTC data was available)
+  if (report.marketRegime) {
+    const regime = report.marketRegime;
+    const trend = `BTC ${regime.btcTrendPct >= 0 ? '+' : ''}${regime.btcTrendPct.toFixed(1)}% vs EMA20`;
+    const demoted = regime.demotedCount > 0 ? ` — ${regime.demotedCount} BUY demoted` : '';
+    const icon = regime.regime === 'risk-off' ? '🚦' : regime.regime === 'risk-on' ? '🟢' : '⚪';
+    const color =
+      regime.regime === 'risk-off' ? chalk.red : regime.regime === 'risk-on' ? chalk.green : chalk.gray;
+    console.log(
+      color(`  ${icon} Market regime: ${regime.regime.toUpperCase()} (${trend})${demoted}`)
+    );
+  }
 
   printSection(
     '🟢 BUY CANDIDATES',
@@ -239,6 +260,7 @@ export function exportReportToJson(report: MarketReport): string {
     watchList: report.watchList.map(summarizeCoin),
     avoidList: report.avoidList.map(summarizeCoin),
     portfolioAnalysis: report.portfolioAnalysis,
+    marketRegime: report.marketRegime,
   };
 
   fs.writeFileSync(filePath, JSON.stringify(jsonData, null, 2));

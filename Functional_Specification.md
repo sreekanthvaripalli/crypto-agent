@@ -233,6 +233,7 @@ sequenceDiagram
 |----------|-----------------|---------------|
 | `GET /coins/markets` | Top coins ranked by market cap | Gets symbol, name, current price, 24h% change, 7d% change, volume |
 | `GET /coins/{id}/ohlc?days=30` | 30 days of OHLC candles (4-hourly, ~180 per coin) | Gets Open/High/Low/Close data for all technical indicators |
+| `GET /coins/{id}/market_chart?days=30` | Hourly prices + **traded volumes** | Volume history is bucketed into the OHLC candles → real volume spikes + MFI |
 | `GET /search/trending` | Currently trending coins | Sentiment source — titles/descriptions are scored for sentiment |
 | `GET /coins/{id}/status_updates` | Project announcements & updates | Per-coin "news" used by `getNewsForCoin()` |
 
@@ -899,7 +900,7 @@ flowchart TD
 
 6. **Rate limits**: The free CoinGecko tier allows ~10–30 calls/min. We add a 2s delay and retry 429s (honoring the `Retry-After` header). Fetching 50 coins can take several minutes and may include 60s waits. An API key removes most of this.
 
-7. **No volume data per candle**: CoinGecko's OHLC endpoint returns **no volume**. "Volume spike" is therefore a **price-range volatility proxy** — it measures whether recent candles moved more than older ones, not traded volume.
+7. **Volume is real, with a fallback**: the OHLC endpoint has no volume, so per-candle **traded volume is fetched separately** from `/market_chart` and bucketed to match the candles. If that call fails, the "volume spike" signal falls back to a **price-range proxy** (recent candles moved more than older ones) — and `volumeIsReal` marks which was used.
 
 8. **Correlation is measured, not enforced**: We compute a correlation/diversification score and beta vs BTC, and show them in the report — but signals are **not** gated on the Bitcoin regime. If BTC drops, most alts still follow.
 
@@ -1426,6 +1427,7 @@ Recommendation | News Sentiment | Alignment | Confidence
 ### 13.6 Future Enhancements — Status & Roadmap
 
 Backtesting (13.6.3) is now **implemented** — see §13.12 for the engine and its results.
+Signal-quality features (volume, regime gate, trailing stop, weight tuning) are documented in §13.14.
 The remaining planned features:
 
 #### 13.6.1 Real-time Features (TODO)
@@ -1464,9 +1466,12 @@ The remaining planned features:
 | **Portfolio Analysis** | ✅ Complete | Diversification score, correlation, rebalancing suggestions, portfolio risk metrics |
 | **News Validation** | ⚠️ Partial | Keyword-based sentiment over trending coins and project status updates |
 | **Backtesting Engine** | ✅ Complete | Point-in-time replay, forward returns, MAE/MFE, BUY-vs-AVOID edge |
-| **Automated Tests & CI** | ✅ Complete | 60 tests (Node test runner), ESLint, GitHub Actions |
-| **Configurable Strategy Weights** | ⏳ TODO | Weights currently hardcoded in `classifier.ts` |
-| **Real per-candle volume** | ⏳ TODO | Would replace the price-range "volume spike" proxy (`/market_chart` returns volumes) |
+| **Configurable Strategy Weights** | ✅ Complete | All weights + thresholds in `scoring-config.ts`, overridable via `scoring-weights.json` |
+| **Weight Tuning** | ✅ Complete | `npm run tune` — random search scored by the backtest with time-split validation |
+| **Real per-candle volume** | ✅ Complete | `/market_chart` volumes bucketed per candle; enables real volume spikes + MFI |
+| **BTC regime gate** | ✅ Complete | Risk-off BTC regime demotes BUY signals to WATCHLIST |
+| **Trailing stop** | ✅ Complete | Chandelier Exit (22-period, 3× ATR) surfaced in the report |
+| **Automated Tests & CI** | ✅ Complete | 78 tests, ESLint, GitHub Actions |
 | **Real-time Features** | ⏳ TODO | WebSocket, alerts, live dashboard |
 | **Multi-timeframe Analysis** | ⏳ TODO | Cross-timeframe validation and correlation |
 | **Customizable Strategies** | ⏳ TODO | Strategy builder and risk profiles |
@@ -1666,24 +1671,84 @@ precise definitions the code now uses:
 | **Stochastic** | %K series → %D = SMA(%K, 3) → signal = SMA(%D, 3) |
 | **Ichimoku** | Conversion/Base/Leading Span B from **highs and lows** (not closes); needs 52 candles |
 | **Max drawdown** | Largest peak-to-trough decline over the candle series |
-| **Volume spike** | ⚠️ **Price-range proxy** — recent candle ranges vs older ones. CoinGecko OHLC has no volume |
+| **Volume spike** | Real traded volume (recent vs older candles, +30% ⇒ spike). Falls back to a price-range proxy when volume is unavailable |
+| **MFI** | Money Flow Index (14-period) from candle HLC + real per-candle volume; ≤20 oversold, ≥80 overbought |
+| **Trailing stop** | Chandelier Exit (22-period, 3× ATR): `(price − exitLong) / price`, clamped to 0–50% below price |
 
 Two definitions deserve emphasis because they are easy to misread in the report:
 
 - **The "portfolio" analysis is a market simulation, not your holdings.** `totalValue` is the
   summed market cap of the analyzed coins, and weights are cap-weighted. It answers "how would a
   market-cap-weighted basket of these coins look?" — not "how is *my* portfolio doing?"
-- **The "volume spike" signal is not volume.** Free-tier OHLC returns no volume, so the signal
-  measures whether recent candles *moved* more than older ones. Treat it as a volatility burst.
+- **Check `volumeIsReal` before trusting a volume spike.** When per-candle volume was fetched the
+  signal reflects real traded volume; when the volume call failed it degrades to a price-range
+  proxy, which is a *volatility burst*, not volume.
 
 ---
 
+### 13.14 Signal Quality — Volume, Regime, Trailing Stops & Weight Tuning
+
+This release closes the loop between "we measure signals" (backtest) and "we improve them".
+
+#### 1. Real traded volume (replaces the proxy)
+
+CoinGecko's OHLC endpoint carries no volume, so the agent now fetches **`/coins/{id}/market_chart`**, which returns hourly `total_volumes`, and **buckets them into the 4-hourly candles** (verified live: 721 hourly points → 180 candle buckets for BTC, ~$240B per bucket).
+
+What this unlocks:
+- **Volume spike** now compares *actual traded volume* of recent vs older candles. If the volume call fails, the price-range proxy is used instead and `volumeIsReal: false` marks it — so the report never silently claims real volume it doesn't have.
+- **MFI (Money Flow Index, 14-period)** — a volume-weighted RSI. Divergence between price and money flow is one of the few volume-based signals that is genuinely independent of the indicators already in use.
+
+#### 2. BTC Market Regime Gate
+
+~80% of altcoins follow BTC, so the agent now computes the **BTC regime** from EMA20/EMA50 on BTC closes:
+
+| Condition | Regime | Effect |
+|---|---|---|
+| price > EMA20 > EMA50 | 🟢 risk-on | BUY signals stand |
+| price < EMA20 < EMA50 |  **risk-off** | **BUY signals are demoted to WATCHLIST** |
+| otherwise | ⚪ neutral | BUY signals stand |
+
+Demoted coins get an explicit signal line (` BUY demoted — BTC risk-off regime`) and the report shows a regime banner. The JSON export includes a `marketRegime` block with `btcTrendPct` and `demotedCount`. This is the tool's biggest structural fix: previously a perfect altcoin setup still produced BUY during a BTC crash.
+
+#### 3. Trailing Stop (Chandelier Exit)
+
+Alongside the fixed ATR stop and 2:1 take-profit, each coin now reports a **trailing stop** from the Chandelier Exit (22-period, 3× ATR) — `(price − exitLong) / price` as a fraction below the current price. It rises as the trend extends, which is how you protect gains once a position is in profit.
+
+> ️ Implementation note: `technicalindicators` declares `ChandelierExit.calculate` as returning `number[]`, but at runtime it returns `{ exitLong, exitShort }` objects. The code casts accordingly and a test locks the behavior in.
+
+#### 4. Configurable Weights + Automatic Tuning
+
+Every weight and threshold now lives in **`src/analyzer/scoring-config.ts`**, and `scoring-weights.json` in the project root can override any subset (invalid or missing values fall back to defaults, so a broken file cannot break the agent). **Defaults replicate the original hand-picked constants exactly** — a regression test asserts this, so behavior is unchanged until you opt in.
+
+The tuner (`npm run tune`) treats the backtest as a **fitness function**:
+
+```
+1. Evaluate the baseline (default weights)
+2. Generate N candidates: each signal weight × U(0.5, 1.5); fresh BUY/AVOID thresholds
+3. Replay every candidate through the backtest (step-sampled)
+4. Split signals chronologically — early = TRAIN, later = VALIDATION
+5. Objective = mean VALIDATION "BUY − AVOID" spread across horizons
+6. Report the ranking; --apply writes the winner to scoring-weights.json
+```
+
+**Guard against degenerate solutions:** a candidate with fewer than `minBuySamples` BUY signals in validation is scored as *invalid* (−∞). Without this, weights that never emit BUY would trivially show a zero-perfect spread.
+
+```bash
+npm run tune                              # 60 candidates, cached data
+npm run tune -- --candidates=150 --seed=7 # reproducible larger search
+npm run tune -- --step=2 --min-buy=15     # finer resolution, stricter validity
+npm run tune -- --apply                   # adopt the winner
+```
+
+> ⚠️ **Honest limitation:** candidates are tuned and validated on the *same* 30-day window (time-split, but one market regime) with heavily overlapping samples. If the baseline itself scores `invalid`, the winner's objective is unproven. Treat tuned weights as a starting point for re-validation on fresh data.
+
+---
 
 ## 14. Testing, CI & Configuration
 
 ### Automated tests
 
-The suite runs on Node's built-in test runner (no extra framework) with **60 tests**:
+The suite runs on Node's built-in test runner (no extra framework) with **78 tests**:
 
 ```bash
 npm test        # build + run all tests
@@ -1700,7 +1765,10 @@ npm run build   # compile to dist/
 | `classifier.test.ts` | Contrarian categorization (oversold ⇒ BUY, overbought rally ⇒ AVOID), score clamping |
 | `ml-sentiment.test.ts` | 0–1 confidence contract, alignment, neutral fallback |
 | `sentiment-keywords.test.ts` | Word-boundary matching (no "up" inside "upgrade") |
-| `fetcher.test.ts` | **Flat query params** (the 422 regression), 422 window fallback, 429 `Retry-After` |
+| `fetcher.test.ts` | **Flat query params** (the 422 regression), 422 window fallback, 429 `Retry-After`, volume-history bucketing |
+| `market-regime.test.ts` | BTC regime classification (risk-on / risk-off / neutral) |
+| `scoring-config.test.ts` | Defaults equal the legacy constants, override merging, invalid-value fallback |
+| `tuner.test.ts` | Seeded PRNG determinism, candidate ranges, reproducible tuning, invalid-candidate handling |
 | `db.test.ts` | Save/load, entry cap, retention cleanup |
 
 **Notable regression tests** — these exist because the bugs actually shipped at some point:
@@ -1709,7 +1777,12 @@ npm run build   # compile to dist/
 2. Query params must be sent **flat** (`vs_currency=usd`), not double-nested (`params[vs_currency]`).
 3. The stop-loss must stay inside the 5%–50% band (it previously used *annualized* volatility,
    producing >100% stops).
-4. Historical snapshots must not contain **future candle data**.
+4. Historical snapshots must not contain **future candle data** — including **future volumes**
+   (`candleVolumes` is truncated alongside the candles).
+5. `DEFAULT_WEIGHTS` must equal the original hard-coded constants, so extracting them into
+   config changed nothing.
+6. Volume handling must fall back to the range proxy (and report `volumeIsReal: false`) when
+   per-candle volume is absent — the report must never claim real volume it doesn't have.
 
 ### Continuous integration
 
@@ -1726,25 +1799,31 @@ npm run build   # compile to dist/
 | `CRYPTO_AGENT_DATA_DIR` | `./data` | Where the market cache is stored |
 | `CRON_SCHEDULE` | `0 8 * * *` | Scheduler cron expression |
 
+**Scoring configuration (not an env var):** an optional `scoring-weights.json` in the project root
+overrides any subset of the scoring weights/thresholds. Invalid values are ignored and missing
+fields fall back to `DEFAULT_WEIGHTS`, so the file can never break a run.
+
 ### npm scripts
 
 | Script | Command | What it does |
 |--------|---------|--------------|
 | `npm run dev` | `ts-node src/index.ts` | Run the analysis and print the report |
 | `npm run backtest` | `ts-node src/backtest.ts` | Replay history and measure signal edge |
+| `npm run tune` | `ts-node src/tune.ts` | Search for better scoring weights (`--apply` writes `scoring-weights.json`) |
 | `npm run schedule` | `ts-node src/scheduler.ts` | Cron-scheduled runs |
 | `npm test` | `tsc && node --test` | Build and run the test suite |
 | `npm run lint` | `eslint src` | Static analysis |
 
 ### Known gaps
 
-- **No real volume data** — the free OHLC endpoint has none; `/market_chart` does (verified: 721
-  hourly volume points for BTC over 30 days), so per-candle volume is achievable.
-- **Strategy weights are hardcoded** in `classifier.ts` — the backtest now provides the
-  measurement needed to tune them responsibly.
-- **BTC regime is not enforced** — beta is computed and reported but does not gate BUY signals.
-- **No position tracking** — stops/targets are suggestions; there is no trailing stop, no live
-  P&L, and no order placement.
+- **One regime only** — both the backtest and the tuner cover a single ~30-day window with
+  heavily overlapping samples. There is no multi-year/multi-regime walk-forward yet.
+- **No position tracking** — stops/targets (including the trailing stop) are *suggestions*;
+  there is no live P&L, no breakeven move, and no order placement.
+- **Multi-timeframe confirmation is missing** — everything is computed on one 4-hourly timeframe.
+- **News sentiment is lexicon-based** — TF-IDF + keyword matching, not a trained model.
+- **Alerts do not exist** — signals are only visible by running the agent or reading the JSON.
+- **No exchange integration** — nothing is executed automatically.
 
 ---
 ## Final Reminder

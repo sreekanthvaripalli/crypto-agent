@@ -9,6 +9,7 @@ import {
   SignalCategory,
 } from '../types';
 import { analyzeCoin } from './classifier';
+import { DEFAULT_WEIGHTS, ScoringWeights } from './scoring-config';
 
 export const DEFAULT_HORIZONS_IN_DAYS = [1, 3, 7];
 
@@ -24,6 +25,8 @@ export interface BacktestOptions {
   step?: number;
   /** Include raw per-signal outcomes in the report (default false) */
   includeOutcomes?: boolean;
+  /** Scoring weights to classify with (defaults replicate legacy behavior) */
+  weights?: ScoringWeights;
 }
 
 /**
@@ -59,6 +62,7 @@ export function buildPointInTimeCoin(
   candlesPerDay: number
 ): CoinMarketData {
   const history = coin.ohlcData.slice(0, index + 1);
+  const volumes = coin.candleVolumes?.slice(0, index + 1);
   const day = Math.max(1, Math.round(candlesPerDay));
   const current = history[history.length - 1].close;
 
@@ -78,6 +82,9 @@ export function buildPointInTimeCoin(
     ...coin,
     currentPrice: current,
     ohlcData: history,
+    // Volumes must be truncated with the candles — keeping the full array
+    // would leak future volume into historical MFI/volume-spike signals.
+    ...(volumes ? { candleVolumes: volumes } : {}),
     priceChange24hPercent: percentChange(day),
     priceChange7dPercent: percentChange(day * 7),
     priceChange1d: absoluteChange(day),
@@ -95,6 +102,7 @@ export function runBacktest(
 ): BacktestReport {
   const horizons = options.horizonsInDays ?? DEFAULT_HORIZONS_IN_DAYS;
   const step = Math.max(1, options.step ?? 1);
+  const weights = options.weights ?? DEFAULT_WEIGHTS;
 
   const outcomes: BacktestOutcome[] = [];
   let coinsAnalyzed = 0;
@@ -125,7 +133,7 @@ export function runBacktest(
 
     for (let i = warmup; i <= lastEvaluableIndex; i += step) {
       const snapshot = buildPointInTimeCoin(coin, i, day);
-      const analysis = analyzeCoin(snapshot);
+      const analysis = analyzeCoin(snapshot, weights);
       const entry = candles[i].close;
       if (entry === 0) continue;
 

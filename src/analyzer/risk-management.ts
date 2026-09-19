@@ -1,4 +1,5 @@
 import { EnhancedCoinAnalysis, RiskMetrics, PortfolioImpact, OHLCCandle } from '../types';
+import { ChandelierExit } from 'technicalindicators';
 
 /**
  * Advanced risk management and portfolio analysis
@@ -50,6 +51,7 @@ export class RiskManager {
     const dailyVolatility = this.calculateDailyVolatility(returns, periodsPerYear);
     const stopLossLevel = this.calculateStopLoss(coin, dailyVolatility);
     const takeProfitLevel = this.calculateTakeProfit(coin, dailyVolatility);
+    const trailingStopLevel = this.calculateTrailingStop(coin);
 
     return {
       volatility,
@@ -59,7 +61,8 @@ export class RiskManager {
       beta,
       positionSize,
       stopLossLevel,
-      takeProfitLevel
+      takeProfitLevel,
+      trailingStopLevel: trailingStopLevel ?? undefined
     };
   }
 
@@ -302,6 +305,41 @@ export class RiskManager {
    */
   private calculateTakeProfit(coin: EnhancedCoinAnalysis, dailyVolatility: number): number {
     return this.calculateStopLoss(coin, dailyVolatility) * 2;
+  }
+
+  /**
+   * Chandelier-exit style trailing stop: (highest high − 3 × ATR) expressed
+   * as a fraction below the current price. Rises with the trend, falls never —
+   * use it to protect gains once a position is in profit.
+   * Returns null when there is not enough candle history.
+   */
+  private calculateTrailingStop(coin: EnhancedCoinAnalysis): number | null {
+    const candles = coin.coin.ohlcData;
+    const period = 22;
+    if (candles.length < period + 1) return null;
+
+    try {
+      // NOTE: the package's .d.ts declares number[] but the runtime returns
+      // objects { exitLong, exitShort } — hence the cast.
+      const exits = ChandelierExit.calculate({
+        high: candles.map((c) => c.high),
+        low: candles.map((c) => c.low),
+        close: candles.map((c) => c.close),
+        period,
+        multiplier: 3,
+      }) as unknown as { exitLong: number; exitShort: number }[];
+
+      const last = exits[exits.length - 1];
+      const price = coin.coin.currentPrice;
+      if (!last || !Number.isFinite(last.exitLong) || price <= 0) return null;
+
+      const level = (price - last.exitLong) / price;
+      if (!Number.isFinite(level)) return null;
+      if (level <= 0) return 0; // price already below the trailing stop
+      return Math.min(level, 0.5);
+    } catch {
+      return null;
+    }
   }
 
   private calculateCorrelation(returns1: number[], returns2: number[]): number {

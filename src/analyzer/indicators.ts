@@ -3,6 +3,7 @@ import {
   MACD,
   EMA,
   BollingerBands,
+  MFI,
 } from 'technicalindicators';
 import { CoinMarketData, TechnicalIndicators, OHLCCandle } from '../types';
 
@@ -101,10 +102,17 @@ export function calculateIndicators(coin: CoinMarketData): TechnicalIndicators {
   }
 
   // ─── Volume Spike Detection ─────────────────────────────────────────────────
-  // Since CoinGecko OHLC endpoint has no per-candle volume, we approximate
-  // activity by comparing the price range (high - low) of the most recent
-  // candles vs older candles. A spike means recent volatility is much higher.
-  const { volumeSpike, volumeChangePercent } = detectVolatilitySpike(candles);
+  // Real traded volume when per-candle volume is available (fetched from
+  // /coins/{id}/market_chart); otherwise fall back to a price-range proxy,
+  // because CoinGecko's OHLC endpoint has no volume.
+  const volumes = coin.candleVolumes;
+  const hasRealVolume = Array.isArray(volumes) && volumes.length === candles.length;
+  const { volumeSpike, volumeChangePercent } = hasRealVolume
+    ? detectVolumeSpike(volumes as number[])
+    : detectVolatilitySpike(candles);
+
+  // ─── Money Flow Index (requires real per-candle volume) ────────────────────
+  const mfi = hasRealVolume ? computeMFI(candles, volumes as number[]) : null;
 
   return {
     rsi,
@@ -120,7 +128,49 @@ export function calculateIndicators(coin: CoinMarketData): TechnicalIndicators {
     },
     volumeSpike,
     volumeChangePercent,
+    volumeIsReal: hasRealVolume,
+    mfi,
   };
+}
+
+/**
+ * Detect a genuine volume spike: average traded volume of recent candles
+ * versus older candles. A spike means recent volume is 30%+ higher.
+ */
+function detectVolumeSpike(volumes: number[]): {
+  volumeSpike: boolean;
+  volumeChangePercent: number;
+} {
+  if (volumes.length < 6) return { volumeSpike: false, volumeChangePercent: 0 };
+
+  const mid = Math.floor(volumes.length / 2);
+  const older = volumes.slice(0, mid);
+  const recent = volumes.slice(mid);
+
+  const avgOlder = older.reduce((s, v) => s + v, 0) / older.length;
+  const avgRecent = recent.reduce((s, v) => s + v, 0) / recent.length;
+
+  const changePercent = avgOlder > 0 ? ((avgRecent - avgOlder) / avgOlder) * 100 : 0;
+  return { volumeSpike: changePercent > 30, volumeChangePercent: changePercent };
+}
+
+/**
+ * Money Flow Index (14-period) from candle HLC + per-candle volume.
+ * Returns null when the library cannot produce a value.
+ */
+function computeMFI(candles: OHLCCandle[], volumes: number[]): number | null {
+  try {
+    const values = MFI.calculate({
+      high: candles.map((c) => c.high),
+      low: candles.map((c) => c.low),
+      close: candles.map((c) => c.close),
+      volume: volumes,
+      period: 14,
+    });
+    return values.length > 0 ? values[values.length - 1] : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -163,5 +213,7 @@ function buildEmptyIndicators(coin: CoinMarketData): TechnicalIndicators {
     bollingerBands: { upper: null, middle: null, lower: null, position: 'unknown' },
     volumeSpike: false,
     volumeChangePercent: coin.priceChange24hPercent ?? 0,
+    volumeIsReal: false,
+    mfi: null,
   };
 }

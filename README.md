@@ -20,6 +20,7 @@ A professional-grade crypto market analysis agent that checks the top 50 coins b
 - **Portfolio Diversification Analysis** - Correlation matrix and diversification scoring
 - **Dynamic Stop-Loss** - ATR-based (2× ATR below entry, daily-volatility fallback) with confidence score adjustments, clamped to a sane 5%–50% band
 - **Take-Profit Targets** - 2:1 risk-reward ratio above the stop distance, shown per coin
+- **Trailing Stop (Chandelier Exit)** - 22-period / 3× ATR stop that rises with the trend, shown per coin
 - **Risk-Adjusted Returns** - Sharpe ratio and portfolio volatility analysis
 
 ### 🤖 Machine Learning Enhanced Sentiment Analysis
@@ -47,6 +48,8 @@ A professional-grade crypto market analysis agent that checks the top 50 coins b
 
 - Fetches **top 50 coins** from CoinGecko (free API, no key needed)
 - Pulls **30-day OHLC data** for each coin (4-hourly candles — enough history for long-period indicators like Ichimoku and smoothed ADX)
+- Pulls **real per-candle volume** (`/market_chart`) bucketed to match the candles, so volume signals measure actual traded volume
+- Applies a **BTC market-regime gate** — in a BTC risk-off regime (price below a falling EMA20/EMA50), BUY signals are demoted to WATCHLIST because ~80% of altcoins follow BTC
 - Calculates **advanced technical indicators**:
   - **RSI** (Relative Strength Index — overbought/oversold)
   - **MACD** (momentum & crossover detection)
@@ -55,7 +58,8 @@ A professional-grade crypto market analysis agent that checks the top 50 coins b
   - **Ichimoku Cloud** (multi-timeframe analysis)
   - **ATR, ADX** (volatility and trend strength)
   - **Williams %R, CCI, Stochastic** (advanced momentum indicators)
-  - **Volume Spike** detection
+  - **Volume Spike** detection (real traded volume, with a price-range fallback)
+  - **MFI** (Money Flow Index — volume-weighted overbought/oversold)
   - **7-day price change %**
 - **Advanced Risk Analysis**:
   - Kelly Criterion position sizing
@@ -126,19 +130,6 @@ npm run dev -- --refresh --limit=100
 | `CRYPTO_AGENT_DATA_DIR` | `./data` | Where the market cache JSON is stored |
 | `CRON_SCHEDULE` | `0 8 * * *` | Scheduler cron expression |
 
-# Force fresh data fetch from CoinGecko
-npm run dev -- --refresh
-
-# Analyze top 100 coins instead of 50
-npm run dev -- --limit=100
-
-# Skip JSON export
-npm run dev -- --no-json
-
-# Combine options
-npm run dev -- --refresh --limit=100
-```
-
 ### Run with Daily Scheduler
 ```bash
 # Runs at 8:00 AM every day by default (and immediately on start)
@@ -159,6 +150,8 @@ CRON_SCHEDULE="0 * * * *" npm run schedule
 npm test          # Build + run the test suite (Node built-in test runner)
 npm run lint      # ESLint (flat config)
 npm run build     # Compile to dist/
+npm run backtest  # Replay history and measure signal edge
+npm run tune      # Search for better classifier weights
 ```
 
 Tests cover the indicators, advanced indicators (ADX smoothing, Stochastic %D, Ichimoku), risk math (Sharpe/VaR/beta/Kelly/drawdown), the sentiment keyword matching, the classifier, and the cache layer — including a regression test for the empty-OHLC crash. CI (GitHub Actions) runs lint + tests on every push/PR.
@@ -177,9 +170,13 @@ crypto-agent/
 │   ├── database/
 │   │   └── db.ts                 # JSON-file caching layer (retention + entry cap)
 │   ├── analyzer/
-│   │   ├── indicators.ts         # RSI, MACD, EMA, Bollinger Bands
+│   │   ├── indicators.ts         # RSI, MACD, EMA, Bollinger, volume spike, MFI
 │   │   ├── advanced-indicators.ts # Ichimoku Cloud, ATR, ADX, Williams %R, CCI, Stochastic
-│   │   ├── risk-management.ts    # Kelly Criterion, VaR, Sharpe, beta, portfolio analysis
+│   │   ├── risk-management.ts    # Kelly, VaR, Sharpe, beta, stops (incl. trailing), portfolio
+│   │   ├── market-regime.ts      # BTC regime gate (demotes BUY in risk-off)
+│   │   ├── scoring-config.ts     # Tunable scoring weights + scoring-weights.json loader
+│   │   ├── tuner.ts              # Weight search: grid/random + time-split validation
+│   │   ├── backtest.ts           # Walk-forward backtest engine (point-in-time replay)
 │   │   ├── ml-sentiment.ts       # TF-IDF + ensemble sentiment scoring
 │   │   ├── news-validator.ts     # Validate technical analysis with news sentiment
 │   │   ├── sentiment-keywords.ts # Shared keyword lists + word-boundary matching
@@ -190,7 +187,8 @@ crypto-agent/
 │   ├── index.ts                  # Main entry point
 │   └── scheduler.ts              # Cron scheduler (works from source and dist)
 ├── data/                         # market-cache.json (auto-created, gitignored)
-├── reports/                      # report-*.json (auto-created, gitignored)
+├── reports/                      # report-*.json, backtest-*.json (auto-created, gitignored)
+├── scoring-weights.json          # Optional tuned weights (written by `npm run tune -- --apply`)
 └── package.json
 ```
 
@@ -227,6 +225,45 @@ Results are written to `reports/backtest-*.json`.
 
 ---
 
+## 🎛️ Tuning the Scoring Weights
+
+Every scoring weight (RSI buckets, MACD, EMA, Bollinger, 7d price, volume, MFI) and the BUY/AVOID thresholds live in **`src/analyzer/scoring-config.ts`**. Defaults replicate the original hand-picked constants, so behavior is unchanged until you override them.
+
+Create a **`scoring-weights.json`** in the project root with only the fields you want to change — everything else falls back to defaults, and invalid values are ignored (a broken file can never break the agent):
+
+```json
+{
+  "rsiDeepOversold": 35,
+  "macdCrossover": 20,
+  "buyThreshold": 20,
+  "avoidThreshold": -30
+}
+```
+
+### Finding better weights automatically
+
+The tuner uses the **backtest as a fitness function**: it evaluates the baseline plus N random candidates, splitting history chronologically so candidates are scored on a **held-out validation window**.
+
+```bash
+npm run tune                                   # 60 candidates on cached data
+npm run tune -- --candidates=150 --seed=7      # bigger, reproducible search
+npm run tune -- --step=2 --min-buy=15          # finer resolution, stricter validity
+npm run tune -- --refresh --limit=30           # fetch fresh data first
+npm run tune -- --apply                        # write the winner to scoring-weights.json
+```
+
+**How candidates are scored:** the objective is the mean **validation BUY − AVOID** spread across horizons. Candidates that produce too few validation BUY signals are marked *invalid* — otherwise weights that simply never say BUY would "win" trivially.
+
+**Read the output carefully:**
+- **Baseline vs best** — if the baseline itself is `invalid`, the winning objective is unproven.
+- **Train vs validation** — a large drop between them means the weights were overfit.
+- `No candidate beat the baseline` means **keep your current weights**.
+
+> ⚠️ **Honest limitation:** candidates are tuned and validated on the *same* 30-day window (split by time, but the same market regime), with heavily overlapping samples. Treat the winner as a starting point to re-validate on fresh data — not a proven strategy.
+
+---
+
+
 ## 📈 Scoring Logic
 
 | Signal | Bullish (+) | Bearish (-) |
@@ -238,10 +275,9 @@ Results are written to `reports/backtest-*.json`.
 | 7d Price Change | ≤ -20% = +10 pts (dip buy) | ≥ +20% = -10 pts (overextended) |
 | Volume Spike | Spike + price up = +10 pts | Spike + price down = -10 pts |
 
-**Classification thresholds:**
-- 🟢 **BUY**: Score ≥ +25
-- 🟡 **WATCHLIST**: Score between -25 and +25
-- 🔴 **AVOID**: Score ≤ -25
+**Classification thresholds:** 🟢 **BUY**: Score ≥ +25 ·  **WATCHLIST**: −25 … +25 · 🔴 **AVOID**: Score ≤ −25
+
+All weights and thresholds above are **configurable** — see [Tuning the Scoring Weights](#-tuning-the-scoring-weights).
 
 ---
 

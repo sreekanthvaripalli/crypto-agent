@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { fetchFullMarketData } from './fetcher/coingecko';
 import { loadLatestMarketData, closeDb } from './database/db';
 import { runBacktest, DEFAULT_HORIZONS_IN_DAYS } from './analyzer/backtest';
+import { loadWeights } from './analyzer/scoring-config';
 import { printBacktestReport, exportBacktestToJson } from './output/backtest-reporter';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
@@ -72,6 +73,7 @@ async function run(): Promise<void> {
     horizonsInDays: CONFIG.horizonsInDays,
     step: CONFIG.step,
     includeOutcomes: CONFIG.includeOutcomes,
+    weights: loadWeights(),
   });
 
   printBacktestReport(report);

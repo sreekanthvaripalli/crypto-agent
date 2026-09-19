@@ -195,6 +195,46 @@ export async function fetchOHLC(coinId: string): Promise<OHLCCandle[]> {
 }
 
 /**
+ * Fetch hourly traded-volume history for a coin (30 days by default)
+ * from /coins/{id}/market_chart.
+ */
+export async function fetchVolumeHistory(
+  coinId: string,
+  days: number = 30
+): Promise<{ timestamp: number; volume: number }[]> {
+  const response = await getWithRetry(`/coins/${coinId}/market_chart`, {
+    vs_currency: 'usd',
+    days,
+  });
+  const data = response.data as { total_volumes?: [number, number][] };
+  return (data.total_volumes ?? []).map(([timestamp, volume]) => ({ timestamp, volume }));
+}
+
+/**
+ * Sum hourly volume points into per-candle buckets aligned with the OHLC
+ * candles, so indicators see exactly one volume number per candle.
+ */
+export function bucketVolumesIntoCandles(
+  volumes: { timestamp: number; volume: number }[],
+  candles: OHLCCandle[]
+): number[] {
+  const out: number[] = new Array(candles.length).fill(0);
+  let idx = 0;
+
+  for (let i = 0; i < candles.length; i++) {
+    const end = i + 1 < candles.length ? candles[i + 1].timestamp : Infinity;
+    while (idx < volumes.length && volumes[idx].timestamp < end) {
+      if (volumes[idx].timestamp >= candles[i].timestamp) {
+        out[i] += volumes[idx].volume;
+      }
+      idx++;
+    }
+  }
+
+  return out;
+}
+
+/**
  * Fetch full market data including OHLC for top N coins
  * Handles rate limiting with delays between API calls
  */
@@ -202,7 +242,7 @@ export async function fetchFullMarketData(limit: number = 50): Promise<CoinMarke
   const coins = await fetchTopCoins(limit);
   const fullData: CoinMarketData[] = [];
 
-  console.log(`📊 Fetching 30-day OHLC data for ${coins.length} coins...`);
+  console.log(`📊 Fetching 30-day OHLC + volume data for ${coins.length} coins...`);
 
   for (let i = 0; i < coins.length; i++) {
     const coin = coins[i];
@@ -211,7 +251,19 @@ export async function fetchFullMarketData(limit: number = 50): Promise<CoinMarke
     try {
       await sleep(DELAY_MS);
       const ohlcData = await fetchOHLC(coin.id);
-      fullData.push({ ...coin, ohlcData });
+
+      // Real per-candle volume. Optional: if this fails we fall back to the
+      // price-range proxy for the volume-spike signal.
+      let candleVolumes: number[] | undefined;
+      try {
+        await sleep(DELAY_MS);
+        const volumeHistory = await fetchVolumeHistory(coin.id);
+        candleVolumes = bucketVolumesIntoCandles(volumeHistory, ohlcData);
+      } catch {
+        console.log(`\n⚠️  Volume history unavailable for ${coin.symbol} — using price-range proxy`);
+      }
+
+      fullData.push({ ...coin, ohlcData, ...(candleVolumes ? { candleVolumes } : {}) });
     } catch (err) {
       // Retries (incl. 429 backoff) already happened inside getWithRetry.
       console.log(`\n❌ Failed to fetch OHLC for ${coin.symbol}: ${(err as Error).message}`);

@@ -77,6 +77,27 @@ test('Bollinger position is computed for 20+ candles', () => {
   assert.ok(['above_upper', 'below_lower', 'middle'].includes(result.bollingerBands.position));
 });
 
+test('real per-candle volume replaces the range proxy', () => {
+  const candles = makeCandles(60, (i) => 100 + Math.sin(i / 5) * 5);
+  const base = candles.map(() => 1000);
+  // 3x volume surge in the recent half
+  const surged = base.map((v, i) => (i >= 30 ? v * 3 : v));
+  const coin = { ...coinWith(candles), candleVolumes: surged };
+
+  const result = calculateIndicators(coin);
+  assert.equal(result.volumeIsReal, true);
+  assert.equal(result.volumeSpike, true);
+  assert.ok(result.volumeChangePercent > 30);
+  assert.ok(result.mfi !== null && Number.isFinite(result.mfi));
+  assert.ok(result.mfi! >= 0 && result.mfi! <= 100);
+});
+
+test('without candleVolumes the range proxy is used and MFI is null', () => {
+  const result = calculateIndicators(coinWith(makeCandles(60, (i) => 100 + Math.sin(i / 5) * 5)));
+  assert.notEqual(result.volumeIsReal, true);
+  assert.equal(result.mfi ?? null, null);
+});
+
 test('handles empty candle list safely', () => {
   const result = calculateIndicators(coinWith([]));
   assert.equal(result.rsi, null);
