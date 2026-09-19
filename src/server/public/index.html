@@ -80,42 +80,67 @@
     }
 
     function renderDashboard(report) {
-      if (!report || !report.buyList) return;
+      if (!report) return;
 
-      document.getElementById('buy-count').innerText = report.buyList.length;
-      document.getElementById('watch-count').innerText = report.watchList.length;
-      document.getElementById('last-updated').innerText = 'Generated at: ' + new Date(report.generatedAt).toLocaleString();
+      const buyList = report.buyList || [];
+      const watchList = report.watchList || [];
+      const avoidList = report.avoidList || [];
+
+      document.getElementById('buy-count').innerText = buyList.length;
+      document.getElementById('watch-count').innerText = watchList.length;
+      document.getElementById('last-updated').innerText = 'Generated at: ' + (report.generatedAt ? new Date(report.generatedAt).toLocaleString() : 'N/A');
 
       if (report.marketRegime) {
         const regimeEl = document.getElementById('regime-badge');
-        regimeEl.innerText = report.marketRegime.regime.toUpperCase();
+        regimeEl.innerText = (report.marketRegime.regime || 'NEUTRAL').toUpperCase();
         regimeEl.className = 'text-xl font-bold mt-2 ' + (report.marketRegime.regime === 'risk-on' ? 'text-emerald-400' : 'text-red-400');
+      } else {
+        document.getElementById('regime-badge').innerText = 'NEUTRAL';
       }
 
-      const allCoins = [...report.buyList, ...report.watchList, ...report.avoidList];
-      const btcCoin = allCoins.find(c => c.coin.symbol === 'BTC');
+      const allCoins = [...buyList, ...watchList, ...avoidList];
+      const btcCoin = allCoins.find(c => {
+        const sym = c.symbol || (c.coin && c.coin.symbol);
+        return sym === 'BTC' || sym === 'bitcoin';
+      });
+
       if (btcCoin && btcCoin.onChain) {
-        document.getElementById('onchain-status').innerText = btcCoin.onChain.networkCongestion.toUpperCase() + ' (' + btcCoin.onChain.halfHourFeeSatVB + ' sat/vB)';
+        document.getElementById('onchain-status').innerText = (btcCoin.onChain.networkCongestion || 'LOW').toUpperCase() + ' (' + (btcCoin.onChain.halfHourFeeSatVB || 0) + ' sat/vB)';
+      } else {
+        document.getElementById('onchain-status').innerText = 'LOW (Normal)';
       }
 
       const tbody = document.getElementById('table-body');
+      if (allCoins.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="p-6 text-center text-slate-400">No coin analysis data found in latest report.</td></tr>';
+        return;
+      }
+
       tbody.innerHTML = allCoins.map(item => {
-        const catClass = item.category === 'BUY' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-                         item.category === 'AVOID' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+        const symbol = item.symbol || (item.coin ? item.coin.symbol : 'UNKNOWN');
+        const name = item.name || (item.coin ? item.coin.name : symbol);
+        const price = item.price !== undefined ? item.price : (item.coin ? item.coin.currentPrice : 0);
+        const change24h = item.change24h !== undefined ? item.change24h : (item.coin ? item.coin.priceChange24hPercent : 0);
+        const category = item.category || 'WATCHLIST';
+        const score = item.score !== undefined ? item.score : 0;
+        const rsiVal = item.rsi !== undefined ? item.rsi : (item.indicators ? item.indicators.rsi : null);
+
+        const catClass = category === 'BUY' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                         category === 'AVOID' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
                          'bg-amber-500/10 text-amber-400 border-amber-500/20';
 
-        const changeClass = item.coin.priceChange24hPercent >= 0 ? 'text-emerald-400' : 'text-red-400';
+        const changeClass = change24h >= 0 ? 'text-emerald-400' : 'text-red-400';
         const funding = item.derivatives ? (item.derivatives.fundingRate * 100).toFixed(4) + '%' : 'N/A';
-        const stopLoss = item.riskMetrics ? '$' + (item.coin.currentPrice * (1 - item.riskMetrics.stopLossLevel)).toFixed(2) : 'N/A';
+        const stopLoss = item.riskMetrics ? '$' + (price * (1 - item.riskMetrics.stopLossLevel)).toFixed(2) : 'N/A';
 
         return `
           <tr class="hover:bg-slate-700/30 transition">
-            <td class="p-4 font-bold">${item.coin.name} <span class="text-xs text-slate-400">${item.coin.symbol}</span></td>
-            <td class="p-4">$${item.coin.currentPrice}</td>
-            <td class="p-4 ${changeClass}">${item.coin.priceChange24hPercent.toFixed(2)}%</td>
-            <td class="p-4"><span class="px-2 py-1 rounded border text-xs font-semibold ${catClass}">${item.category}</span></td>
-            <td class="p-4 font-semibold">${item.score}</td>
-            <td class="p-4">${item.indicators.rsi ? item.indicators.rsi.toFixed(1) : 'N/A'}</td>
+            <td class="p-4 font-bold">${name} <span class="text-xs text-slate-400">${symbol}</span></td>
+            <td class="p-4">$${price}</td>
+            <td class="p-4 ${changeClass}">${change24h.toFixed(2)}%</td>
+            <td class="p-4"><span class="px-2 py-1 rounded border text-xs font-semibold ${catClass}">${category}</span></td>
+            <td class="p-4 font-semibold">${score}</td>
+            <td class="p-4">${rsiVal !== null && rsiVal !== undefined ? rsiVal.toFixed(1) : 'N/A'}</td>
             <td class="p-4 text-slate-300">${funding}</td>
             <td class="p-4 text-slate-400">${stopLoss}</td>
           </tr>
@@ -127,4 +152,3 @@
   </script>
 </body>
 </html>
-

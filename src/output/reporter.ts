@@ -300,5 +300,7 @@ function summarizeCoin(a: EnhancedCoinAnalysis) {
           stochastic: a.advancedIndicators.stochasticOscillator?.position,
         }
       : undefined,
+    derivatives: a.derivatives,
+    onChain: a.onChain,
   };
 }
