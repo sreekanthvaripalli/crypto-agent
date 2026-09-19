@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { CoinMarketData, OHLCCandle } from '../types';
+import { fetchBinanceTopCoins, fetchBinanceOHLC } from './binance';
 
 // Base URL can be overridden for tests (COINGECKO_BASE_URL)
 const BASE_URL = process.env.COINGECKO_BASE_URL || 'https://api.coingecko.com/api/v3';
@@ -239,38 +240,46 @@ export function bucketVolumesIntoCandles(
  * Handles rate limiting with delays between API calls
  */
 export async function fetchFullMarketData(limit: number = 50): Promise<CoinMarketData[]> {
-  const coins = await fetchTopCoins(limit);
-  const fullData: CoinMarketData[] = [];
+  try {
+    const coins = await fetchTopCoins(limit);
+    const fullData: CoinMarketData[] = [];
 
-  console.log(`📊 Fetching 30-day OHLC + volume data for ${coins.length} coins...`);
+    console.log(`📊 Fetching 30-day OHLC + volume data for ${coins.length} coins...`);
 
-  for (let i = 0; i < coins.length; i++) {
-    const coin = coins[i];
-    process.stdout.write(`\r  Processing: ${i + 1}/${coins.length} — ${coin.symbol.padEnd(10)}`);
+    for (let i = 0; i < coins.length; i++) {
+      const coin = coins[i];
+      process.stdout.write(`\r  Processing: ${i + 1}/${coins.length} — ${coin.symbol.padEnd(10)}`);
 
-    try {
-      await sleep(DELAY_MS);
-      const ohlcData = await fetchOHLC(coin.id);
-
-      // Real per-candle volume. Optional: if this fails we fall back to the
-      // price-range proxy for the volume-spike signal.
-      let candleVolumes: number[] | undefined;
       try {
         await sleep(DELAY_MS);
-        const volumeHistory = await fetchVolumeHistory(coin.id);
-        candleVolumes = bucketVolumesIntoCandles(volumeHistory, ohlcData);
-      } catch {
-        console.log(`\n⚠️  Volume history unavailable for ${coin.symbol} — using price-range proxy`);
+        const ohlcData = await fetchOHLC(coin.id);
+
+        let candleVolumes: number[] | undefined;
+        try {
+          await sleep(DELAY_MS);
+          const volumeHistory = await fetchVolumeHistory(coin.id);
+          candleVolumes = bucketVolumesIntoCandles(volumeHistory, ohlcData);
+        } catch {
+          console.log(`\n⚠️  Volume history unavailable for ${coin.symbol} — using price-range proxy`);
+        }
+
+        fullData.push({ ...coin, ohlcData, dataProvider: 'coingecko', ...(candleVolumes ? { candleVolumes } : {}) });
+      } catch (err) {
+        console.log(`\n⚠️  Failed to fetch CoinGecko OHLC for ${coin.symbol}. Attempting Binance fallback...`);
+        try {
+          const binanceOhlc = await fetchBinanceOHLC(coin.symbol);
+          fullData.push({ ...coin, ohlcData: binanceOhlc, dataProvider: 'binance' });
+        } catch (bErr) {
+          console.log(`\n❌ Binance fallback also failed for ${coin.symbol}: ${(bErr as Error).message}`);
+          fullData.push({ ...coin, ohlcData: [], dataProvider: 'coingecko' });
+        }
       }
-
-      fullData.push({ ...coin, ohlcData, ...(candleVolumes ? { candleVolumes } : {}) });
-    } catch (err) {
-      // Retries (incl. 429 backoff) already happened inside getWithRetry.
-      console.log(`\n❌ Failed to fetch OHLC for ${coin.symbol}: ${(err as Error).message}`);
-      fullData.push({ ...coin, ohlcData: [] });
     }
-  }
 
-  console.log('\n✅ Market data fetch complete.\n');
-  return fullData;
+    console.log('\n✅ Market data fetch complete.\n');
+    return fullData;
+  } catch (err) {
+    console.log(`\n⚠️  CoinGecko top coins fetch failed. Falling back completely to Binance...`);
+    return await fetchBinanceTopCoins(limit);
+  }
 }

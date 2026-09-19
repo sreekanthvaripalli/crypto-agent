@@ -12,6 +12,8 @@ export interface CoinMarketData {
   ohlcData: OHLCCandle[];
   /** Traded volume per candle (aligned 1:1 with ohlcData), when available */
   candleVolumes?: number[];
+  /** Data provider source */
+  dataProvider?: 'coingecko' | 'binance';
 }
 
 export interface OHLCCandle {
