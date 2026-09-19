@@ -78,3 +78,4 @@ export async function fetchBinanceOHLC(symbol: string, limit: number = 180): Pro
     close: parseFloat(kline[4]),
   }));
 }
+

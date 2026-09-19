@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crypto Market Analysis Agent — Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+  <div class="container mx-auto px-4 py-8">
+    <header class="flex justify-between items-center pb-6 mb-8 border-b border-slate-800">
+      <div>
+        <h1 class="text-3xl font-bold text-emerald-400">🤖 Crypto Market Analysis Agent</h1>
+        <p class="text-slate-400 text-sm mt-1">Real-time Technical Analysis, On-Chain & Derivatives Intelligence</p>
+      </div>
+      <button onclick="fetchData()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-medium text-sm transition">
+        🔄 Refresh Data
+      </button>
+    </header>
+
+    <!-- Overview Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+      <div class="bg-slate-800 p-6 rounded-xl border border-slate-700">
+        <span class="text-slate-400 text-sm font-medium">Market Regime</span>
+        <div id="regime-badge" class="text-xl font-bold mt-2 text-emerald-400">Loading...</div>
+      </div>
+      <div class="bg-slate-800 p-6 rounded-xl border border-slate-700">
+        <span class="text-slate-400 text-sm font-medium">Top BUY Opportunities</span>
+        <div id="buy-count" class="text-2xl font-bold mt-2 text-emerald-400">0</div>
+      </div>
+      <div class="bg-slate-800 p-6 rounded-xl border border-slate-700">
+        <span class="text-slate-400 text-sm font-medium">Watchlist Candidates</span>
+        <div id="watch-count" class="text-2xl font-bold mt-2 text-amber-400">0</div>
+      </div>
+      <div class="bg-slate-800 p-6 rounded-xl border border-slate-700">
+        <span class="text-slate-400 text-sm font-medium">Network Congestion (BTC)</span>
+        <div id="onchain-status" class="text-xl font-bold mt-2 text-slate-200">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Main Signal Table -->
+    <div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+      <div class="p-6 border-b border-slate-700 flex justify-between items-center">
+        <h2 class="text-lg font-bold text-slate-200">📊 Market Signals</h2>
+        <span id="last-updated" class="text-xs text-slate-400"></span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+          <thead>
+            <tr class="bg-slate-900/50 text-slate-400 text-xs uppercase border-b border-slate-700">
+              <th class="p-4">Coin</th>
+              <th class="p-4">Price</th>
+              <th class="p-4">24h Change</th>
+              <th class="p-4">Signal</th>
+              <th class="p-4">Score</th>
+              <th class="p-4">RSI</th>
+              <th class="p-4">Funding Rate</th>
+              <th class="p-4">Stop Loss</th>
+            </tr>
+          </thead>
+          <tbody id="table-body" class="divide-y divide-slate-700/50 text-sm">
+            <tr>
+              <td colspan="8" class="p-6 text-center text-slate-400">Fetching live report data...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function fetchData() {
+      try {
+        const res = await fetch('/api/report');
+        const report = await res.json();
+        renderDashboard(report);
+      } catch (err) {
+        console.error('Error fetching report:', err);
+      }
+    }
+
+    function renderDashboard(report) {
+      if (!report || !report.buyList) return;
+
+      document.getElementById('buy-count').innerText = report.buyList.length;
+      document.getElementById('watch-count').innerText = report.watchList.length;
+      document.getElementById('last-updated').innerText = 'Generated at: ' + new Date(report.generatedAt).toLocaleString();
+
+      if (report.marketRegime) {
+        const regimeEl = document.getElementById('regime-badge');
+        regimeEl.innerText = report.marketRegime.regime.toUpperCase();
+        regimeEl.className = 'text-xl font-bold mt-2 ' + (report.marketRegime.regime === 'risk-on' ? 'text-emerald-400' : 'text-red-400');
+      }
+
+      const allCoins = [...report.buyList, ...report.watchList, ...report.avoidList];
+      const btcCoin = allCoins.find(c => c.coin.symbol === 'BTC');
+      if (btcCoin && btcCoin.onChain) {
+        document.getElementById('onchain-status').innerText = btcCoin.onChain.networkCongestion.toUpperCase() + ' (' + btcCoin.onChain.halfHourFeeSatVB + ' sat/vB)';
+      }
+
+      const tbody = document.getElementById('table-body');
+      tbody.innerHTML = allCoins.map(item => {
+        const catClass = item.category === 'BUY' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                         item.category === 'AVOID' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+                         'bg-amber-500/10 text-amber-400 border-amber-500/20';
+
+        const changeClass = item.coin.priceChange24hPercent >= 0 ? 'text-emerald-400' : 'text-red-400';
+        const funding = item.derivatives ? (item.derivatives.fundingRate * 100).toFixed(4) + '%' : 'N/A';
+        const stopLoss = item.riskMetrics ? '$' + (item.coin.currentPrice * (1 - item.riskMetrics.stopLossLevel)).toFixed(2) : 'N/A';
+
+        return `
+          <tr class="hover:bg-slate-700/30 transition">
+            <td class="p-4 font-bold">${item.coin.name} <span class="text-xs text-slate-400">${item.coin.symbol}</span></td>
+            <td class="p-4">$${item.coin.currentPrice}</td>
+            <td class="p-4 ${changeClass}">${item.coin.priceChange24hPercent.toFixed(2)}%</td>
+            <td class="p-4"><span class="px-2 py-1 rounded border text-xs font-semibold ${catClass}">${item.category}</span></td>
+            <td class="p-4 font-semibold">${item.score}</td>
+            <td class="p-4">${item.indicators.rsi ? item.indicators.rsi.toFixed(1) : 'N/A'}</td>
+            <td class="p-4 text-slate-300">${funding}</td>
+            <td class="p-4 text-slate-400">${stopLoss}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    fetchData();
+  </script>
+</body>
+</html>
+

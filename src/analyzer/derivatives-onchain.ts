@@ -73,3 +73,4 @@ export async function fetchOnChainMetrics(): Promise<OnChainMetrics | undefined>
     return undefined;
   }
 }
+
