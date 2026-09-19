@@ -10,7 +10,7 @@
     "schedule": "ts-node src/scheduler.ts",
     "backtest": "ts-node src/backtest.ts",
     "tune": "ts-node src/tune.ts",
-    "test": "npm run build && node --test --test-concurrency=1 $(find dist/__tests__ -name '*.test.js' | sort)",
+    "test": "npm run build && node scripts/run-tests.js",
     "lint": "eslint src"
   },
   "keywords": [
