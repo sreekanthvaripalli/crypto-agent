@@ -196,6 +196,37 @@ crypto-agent/
 
 ---
 
+## 🧪 Backtesting Signals
+
+The classifier's weights are only as good as the evidence behind them, so the agent can **replay history through its own classifier** and measure what actually happened next.
+
+```bash
+npm run backtest                              # replay cached 30-day data
+npm run backtest -- --refresh                 # fetch fresh data first
+npm run backtest -- --limit=20 --step=2       # fewer coins, every 2nd candle
+npm run backtest -- --horizons=1,3,7          # custom forward horizons (days)
+npm run backtest -- --outcomes                # include every raw signal in the JSON
+```
+
+**How it works**
+
+1. For every historical candle it rebuilds a **point-in-time** view of the coin — all prices and percentages are derived only from candles up to that moment, so no future data can leak into a "past" signal.
+2. It runs the *live* `analyzeCoin()` on that snapshot (same code path as production).
+3. It measures forward returns at each horizon (default +1d/+3d/+7d), plus the worst drawdown from entry (**MAE**) and best upside (**MFE**) within the longest horizon.
+
+**Output** — per category (BUY / WATCHLIST / AVOID): sample count, hit rate, average and median forward return, and IR (mean ÷ std). The headline is the signal edge:
+
+| Metric | Meaning |
+|---|---|
+| `BUY − AVOID` | Positive ⇒ the ranking has predictive power |
+| `BUY − ALL` | Edge over picking a coin at random |
+
+Results are written to `reports/backtest-*.json`.
+
+**Honest caveats:** consecutive samples overlap heavily, the cache covers only one ~30-day regime, and a positive spread is *indicative* rather than statistical proof. Use it as a tuning aid, not a validated strategy.
+
+---
+
 ## 📈 Scoring Logic
 
 | Signal | Bullish (+) | Bearish (-) |

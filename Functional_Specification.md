@@ -4,6 +4,10 @@
 > how it analyzes the market, and the crypto fundamentals you need to understand
 > before investing or recommending investments.
 
+**Spec version 2.0** — synced with the current implementation (30-day OHLC data,
+ATR-based stop-loss, portfolio analysis, walk-forward backtesting, test suite).
+Where this document and `src/` disagree, the code wins.
+
 ---
 
 ## 📁 Table of Contents
@@ -20,6 +24,8 @@
 10. [How to Read the Report Output](#10-how-to-read-the-report)
 11. [Glossary of Terms](#11-glossary-of-terms)
 12. [File Reference](#12-file-reference)
+13. [Enhanced Features — Explained for Beginners](#13-enhanced-features---explained-for-beginners)
+14. [Testing, CI & Configuration](#14-testing-ci--configuration)
 
 ---
 
@@ -115,8 +121,8 @@ flowchart TD
     CACHE_CHECK -->|NO or --refresh| FETCH["🌐 Fetch from CoinGecko"]
     
     FETCH --> FETCH_MARKETS["📡 GET /coins/markets<br/>Top N coins by market cap<br/>(price, 24h%, 7d%, volume)"]
-    FETCH_MARKETS --> FETCH_OHLC["📡 GET /coins/{id}/ohlc<br/>7-day OHLC candles per coin<br/>(2 second delay between calls)"]
-    FETCH_OHLC --> SAVE_CACHE["💾 Save to Cache"]
+    FETCH_MARKETS --> FETCH_OHLC["📡 GET /coins/{id}/ohlc<br/>30-day OHLC candles per coin (~180)<br/>(2 second delay + 429 retry/backoff)"]
+    FETCH_OHLC --> SAVE_CACHE["💾 Save to Cache<br/>(retention 7 days, max 12 snapshots)"]
     
     SAVE_CACHE --> ANALYZE
     LOAD --> ANALYZE
@@ -188,15 +194,16 @@ sequenceDiagram
     participant NewsAPI as 📰 CoinGecko News API
     
     Agent->>Agent: Check cache age
-    alt Cache fresh (< 24h)
+    alt Cache fresh (< 4h)
         Cache-->>Agent: Return cached data
     else Cache stale or --refresh
         Agent->>API: GET /coins/markets?per_page=50
         API-->>Agent: Top 50 coins (price, market_cap, 24h%, 7d%)
         
-        loop For each coin (2s delay)
-            Agent->>API: GET /coins/{id}/ohlc?days=7
-            API-->>Agent: 7-day OHLC candles (~42 candles)
+        loop For each coin (2s delay, retries on 429/5xx)
+            Agent->>API: GET /coins/{id}/ohlc?days=30
+            API-->>Agent: 30-day OHLC candles (~180 per coin, 4-hourly)
+            Note over Agent,API: On 422 the window falls back to 14d then 7d
         end
         
         Agent->>Cache: Save market-cache.json
@@ -225,7 +232,12 @@ sequenceDiagram
 | Endpoint | What It Returns | How We Use It |
 |----------|-----------------|---------------|
 | `GET /coins/markets` | Top coins ranked by market cap | Gets symbol, name, current price, 24h% change, 7d% change, volume |
-| `GET /coins/{id}/ohlc?days=7` | 7 days of OHLC candles | Gets Open/High/Low/Close data for technical analysis |
+| `GET /coins/{id}/ohlc?days=30` | 30 days of OHLC candles (4-hourly, ~180 per coin) | Gets Open/High/Low/Close data for all technical indicators |
+| `GET /search/trending` | Currently trending coins | Sentiment source — titles/descriptions are scored for sentiment |
+| `GET /coins/{id}/status_updates` | Project announcements & updates | Per-coin "news" used by `getNewsForCoin()` |
+
+**Optional API key:** set `COINGECKO_API_KEY` (with `COINGECKO_API_TIER=demo|pro`) to raise
+rate limits. `COINGECKO_BASE_URL` overrides the base URL (used by the test suite).
 
 ### What is OHLC Data?
 
@@ -249,7 +261,10 @@ graph LR
 
 Then the OHLC candle = `[timestamp, 67000, 68500, 66200, 67800]`
 
-**For 7-day analysis**: CoinGecko gives ~42 candles (one per 4 hours × 7 days × 6 per day = 42)
+**For 30-day analysis**: CoinGecko gives ~180 candles (one per 4 hours × 30 days × 6 per day = 180).
+This longer window is what makes Ichimoku (needs 52 candles) and properly smoothed ADX possible.
+If the API rejects the 30-day window (HTTP 422 on some tiers), the fetch automatically falls
+back to 14 days, then 7 days, so data always flows.
 
 ---
 
@@ -824,375 +839,6 @@ Since CoinGecko doesn't give us volume per candle, we use **price range** (high 
 | Volatility spike + price UP | **+10 pts** | Strong buying pressure |
 | Volatility spike + price DOWN | **-10 pts** | Strong selling pressure |
 
-### 6.8 News Validation Feature
-
-News validation is a new feature that enhances the crypto market analysis by incorporating real-world news sentiment into the technical analysis recommendations. It helps validate whether the technical analysis aligns with current market sentiment and events.
-
-#### How News Validation Works
-
-```mermaid
-flowchart TD
-    TECHNICAL["📊 Technical Analysis<br/>- RSI, MACD, EMA, etc.<br/>- Score: -100 to +100<br/>- Category: BUY/WATCH/AVOID"]
-    
-    TECHNICAL --> NEWS_VALIDATION["📰 News Validation<br/>- Fetch trending crypto news<br/>- Analyze sentiment<br/>- Compare with technical recommendation"]
-    
-    NEWS_VALIDATION --> RESULT["✅ Enhanced Result<br/>- News sentiment<br/>- Alignment score<br/>- Adjusted confidence"]
-    
-    subgraph NEWS_VALIDATION_DETAILS["News Validation Process"]
-        direction TB
-        FETCH["🔄 Fetch News for Analyzed Coins<br/>from CoinGecko API"]
-        FILTER["🔍 Filter News by Coin Name<br/>Match articles to analyzed coins"]
-        SENTIMENT["📊 Sentiment Analysis<br/>- Positive keywords: moon, bull, surge<br/>- Negative keywords: bear, dump, crash<br/>- Neutral: No strong sentiment"]
-        COMPARE["⚖️ Compare with Technical<br/>- Does news match recommendation?<br/>- Strong/Moderate/Weak alignment?"]
-        ADJUST["⚡ Adjust Confidence<br/>- +20% for aligned news<br/>- -10% for conflicting news"]
-    end
-    
-    NEWS_VALIDATION_DETAILS --> RESULT
-```
-
-### News API Integration Points
-
-#### 1. **News API Calls** (`src/fetcher/news.ts`)
-
-The news service makes API calls to CoinGecko's trending endpoint:
-
-```typescript
-// Main trending news endpoint
-private readonly API_URL = 'https://api.coingecko.com/api/v3/search/trending';
-
-// Method to get trending crypto news
-async getTrendingNews(): Promise<CryptoNews> {
-  const response = await axios.get(this.API_URL);
-  // Processes trending coins and extracts news-like information
-}
-
-// Method to get specific coin news
-async getNewsForCoin(coinId: string): Promise<NewsArticle[]> {
-  const response = await axios.get(
-    `https://api.coingecko.com/api/v3/coins/${coinId}/tickers`
-  );
-  // Gets ticker data that includes news-like information
-}
-```
-
-#### 2. **News Analysis** (`src/analyzer/news-validator.ts`)
-
-The news validation service performs the actual analysis:
-
-```typescript
-// Main validation method
-async validateAnalysis(analysis: CoinAnalysis): Promise<NewsValidationResult> {
-  const news = await this.newsService.getTrendingNews();
-  const coinNews = news.articles.filter(
-    article => article.title.toLowerCase().includes(analysis.coin.name.toLowerCase())
-  );
-
-  const newsSentiment = this.determineOverallSentiment(coinNews);
-  const alignment = this.calculateAlignment(analysis.category, newsSentiment);
-  const confidenceScore = this.calculateConfidenceScore(analysis, coinNews, newsSentiment);
-  
-  return { /* validation result */ };
-}
-
-// Enhanced sentiment analysis using comprehensive keyword matching
-private analyzeSentiment(text: string): 'positive' | 'negative' | 'neutral' {
-  const lowerText = text.toLowerCase();
-  
-  const positiveKeywords = [
-    // Bullish indicators
-    'moon', 'bull', 'surge', 'pump', 'breakout', 'rally',
-    'buy', 'up', 'growth', 'gain', 'win', 'success',
-    
-    // Development & partnerships
-    'launch', 'partnership', 'integration', 'adoption', 'upgrade',
-    'listing', 'exchange', 'support', 'backed', 'investment',
-    'funding', 'capital', 'vc', 'institutional',
-    
-    // Technical improvements
-    'upgrade', 'improvement', 'enhancement', 'optimization',
-    'scalability', 'speed', 'efficiency', 'innovation',
-    
-    // Market sentiment
-    'demand', 'interest', 'popularity', 'trending', 'viral',
-    'hype', 'buzz', 'excitement', 'optimism',
-    
-    // Adoption & utility
-    'payment', 'merchant', 'ecommerce', 'real-world', 'utility',
-    'use-case', 'application', 'product', 'service'
-  ];
-  
-  const negativeKeywords = [
-    // Bearish indicators
-    'bear', 'dump', 'crash', 'plummet', 'sell-off', 'correction',
-    'sell', 'down', 'loss', 'fail',
-    
-    // Security issues
-    'hack', 'exploit', 'bug', 'vulnerability', 'security',
-    'breach', 'theft', 'fraud', 'scam', 'phishing',
-    
-    // Regulatory issues
-    'regulation', 'ban', 'prohibit', 'restrict', 'legal',
-    'lawsuit', 'investigation', 'compliance', 'warning',
-    
-    // Technical problems
-    'outage', 'downtime', 'error', 'failure', 'crash',
-    'slow', 'lag', 'performance', 'issue', 'problem',
-    
-    // Market concerns
-    'fud', 'fear', 'uncertainty', 'doubt', 'panic', 'concern',
-    'risk', 'danger', 'warning', 'caution',
-    
-    // Team & governance issues
-    'team', 'founder', 'ceo', 'leadership', 'management',
-    'resign', 'quit', 'leave', 'scandal', 'controversy',
-    
-    // Geopolitical risks
-    'war', 'conflict', 'tension', 'sanction', 'tariff',
-    'trade war', 'geopolitical', 'invasion', 'military',
-    'escalation', 'crisis', 'instability', 'turmoil',
-    'embargo', 'blockade', 'political', 'election',
-    'protest', 'unrest', 'strike', 'shutdown'
-  ];
-  
-  if (positiveKeywords.some(word => lowerText.includes(word))) {
-    return 'positive';
-  } else if (negativeKeywords.some(word => lowerText.includes(word))) {
-    return 'negative';
-  }
-  return 'neutral';
-}
-```
-
-#### 3. **Integration in Main Flow** (`src/index.ts`)
-
-The news validation is integrated into the main analysis pipeline:
-
-```typescript
-// After technical analysis
-const analyzed: CoinAnalysis[] = analyzeAll(coins);
-
-// News validation step
-console.log(chalk.cyan(`📰 Validating recommendations with crypto news...`));
-const newsValidator = new NewsValidator();
-const validatedAnalyses = await Promise.all(
-  analyzed.map(analysis => newsValidator.validateAnalysis(analysis))
-);
-
-// Build enhanced report with news validation
-const enhancedBuyList = buyList.map(a => ({
-  ...analyzed.find(an => an.coin.id === a.coinId)!,
-  newsValidation: a
-}));
-```
-
-#### News Sources Considered
-
-The agent uses **CoinGecko's Trending API** which provides:
-
-- **Trending cryptocurrencies** - Most popular coins currently
-- **News articles** - Recent articles about trending coins
-- **Market sentiment** - Overall positive/negative/neutral sentiment
-
-**Why CoinGecko?**
-- Free to use (no API key required)
-- Reliable and covers 1000+ cryptocurrencies
-- Provides both technical data AND news content
-- No rate limits for basic usage
-
-#### News Validation Process
-
-1. **Fetch News for Analyzed Coins**
-   - Gets news articles for the specific coins that were analyzed
-   - Retrieves recent news about each analyzed coin
-   - Analyzes article titles and descriptions for each coin
-
-2. **Sentiment Analysis**
-   - **Positive keywords**: moon, bull, surge, pump, breakout, rally
-   - **Negative keywords**: bear, dump, crash, plummet, sell-off, correction
-   - **Neutral**: No strong sentiment detected
-
-3. **Alignment Scoring**
-   - **Strong**: News sentiment matches technical recommendation
-   - **Moderate**: News is neutral or recommendation is neutral
-   - **Weak**: News sentiment doesn't match recommendation
-   - **Conflicting**: News strongly contradicts recommendation
-
-4. **Confidence Adjustment**
-   - Base confidence: 70% (technical analysis only)
-   - +20% if news sentiment strongly aligns
-   - -10% if news sentiment conflicts
-   - Final confidence: 60-90%
-
-#### Sample Output Explained
-
-```
-📊 Enhanced Report with News Validation
-───────────────────────────────────────────
-Recommendation | News Sentiment | Alignment | Confidence
-─────────────────────────────────────────────────────────
-1. USD1                 | neutral       | moderate  | 70%
-2. Tether Gold          | neutral       | moderate  | 70%
-3. PAX Gold             | neutral       | moderate  | 70%
-1. Bitcoin              | neutral       | moderate  | 90%
-2. Solana               | neutral       | moderate  | 90%
-3. MemeCore             | neutral       | moderate  | 70%
-1. Toncoin              | neutral       | moderate  | 70%
-2. Falcon USD           | neutral       | moderate  | 70%
-3. WhiteBIT Coin        | neutral       | moderate  | 70%
-```
-
-**Column Explanations:**
-
-| Column | Meaning | Example |
-|--------|---------|---------|
-| **Recommendation** | Technical analysis category | BUY, WATCHLIST, AVOID |
-| **News Sentiment** | Overall news sentiment | positive, negative, neutral |
-| **Alignment** | How well news matches recommendation | strong, moderate, weak, conflicting |
-| **Confidence** | Final confidence score | 70%, 90%, etc. |
-
-**Interpretation Guide:**
-
-- **Strong + Positive**: Technical says BUY, news is positive → High confidence (90%)
-- **Moderate + Neutral**: Technical says BUY, news is neutral → Medium confidence (70%)
-- **Weak + Negative**: Technical says BUY, news is negative → Low confidence (60%)
-- **Conflicting**: Technical and news disagree → Very low confidence (50% or less)
-
-#### Benefits of News Validation
-
-1. **Reduces False Signals** - Technical analysis alone can miss important news events
-2. **Improves Confidence** - News alignment increases confidence in recommendations
-3. **Better Risk Management** - Conflicting signals warn of potential risks
-4. **More Reliable** - Combines technical and fundamental factors
-
-#### Limitations of News Validation
-
-1. **Sentiment Accuracy** - Keyword-based analysis isn't perfect
-2. **News Lag** - News may not reflect real-time market conditions
-3. **Bias** - News sources may have their own biases
-4. **Volume** - Some coins have little news coverage
-
-### 6.2 MACD — Moving Average Convergence Divergence
-
-**What it measures**: Momentum — is the price gaining or losing speed?
-
-```mermaid
-graph TB
-    subgraph MACD_CONCEPT["MACD Components"]
-        MACD_LINE["MACD Line = EMA(12) - EMA(26)<br/>(Fast average minus slow average)"]
-        SIGNAL_LINE["Signal Line = EMA(9) of MACD<br/>(Smoothed version)"]
-        HISTOGRAM["Histogram = MACD - Signal<br/>(Gap between the two)"]
-    end
-    
-    subgraph CROSSOVERS["📈 Crossovers Matter Most"]
-        BULLISH["BULLISH CROSSOVER ✅<br/>MACD crosses ABOVE Signal<br/>Momentum shifting UP"]
-        BEARISH["BEARISH CROSSOVER ❌<br/>MACD crosses BELOW Signal<br/>Momentum shifting DOWN"]
-    end
-    
-    MACD_CONCEPT --> CROSSOVERS
-```
-
-**Visual example:**
-
-```
-MACD Line    ════════════════════════════════════
-Signal Line  ────────────────────────────────────
-             ↓
-Time ───────►
-             
-             ┌─ BULLISH CROSSOVER ─┐
-             │                      │
-MACD Line    ───────╱╱╱╱╱╱╱╱╱╱╱──────
-Signal Line  ─────────────────╲──────
-                    ▲
-                    └── BUY SIGNAL
-```
-
-**Scoring:**
-| Condition | Score | Meaning |
-|-----------|-------|---------|
-| Bullish crossover (just happened) | **+25 pts** | Strong buy signal |
-| MACD above signal (ongoing) | **+10 pts** | Upward momentum |
-| Bearish crossover (just happened) | **-25 pts** | Strong sell signal |
-| MACD below signal (ongoing) | **-10 pts** | Downward momentum |
-
----
-
-### 6.3 EMA — Exponential Moving Average (7 & 14)
-
-**What it measures**: Is the price trending up or down in the short term?
-
-**EMA** = Average price, but recent prices count MORE than old prices.
-
-```mermaid
-graph LR
-    subgraph EMA_COMP["EMA Comparison"]
-        EMA7["EMA 7 = Average of<br/>LAST 7 candles<br/>(reacts quickly)"]
-        EMA14["EMA 14 = Average of<br/>LAST 14 candles<br/>(more stable)"]
-    end
-    
-    EMA7 --> COMPARE{"Compare"}
-    EMA14 --> COMPARE
-    
-    COMPARE -->|EMA7 > EMA14| UP["📈 UPTREND<br/>Recent prices higher<br/>than older prices<br/>+15 pts"]
-    COMPARE -->|EMA7 < EMA14| DOWN["📉 DOWNTREND<br/>Recent prices lower<br/>than older prices<br/>-15 pts"]
-```
-
-**Plain English**: If the 7-candle average is ABOVE the 14-candle average, it means prices have been rising recently — a good sign.
-
----
-
-### 6.4 Bollinger Bands
-
-**What it measures**: How "stretched" the price is from its normal range.
-
-```mermaid
-graph TB
-    subgraph BB["Bollinger Bands"]
-        direction TB
-        UPPER["════════ UPPER BAND ════════<br/>(Middle + 2×Std Dev)<br/>Price here = OVERBOUGHT"]
-        MIDDLE["──────── MIDDLE BAND ────────<br/>(20-candle average)<br/>Normal price level"]
-        LOWER["════════ LOWER BAND ════════<br/>(Middle - 2×Std Dev)<br/>Price here = OVERSOLD"]
-    end
-    
-    PRICE_ABOVE["Price ABOVE Upper Band"] --> PENALTY["-15 pts<br/>(Overextended)"]
-    PRICE_BELOW["Price BELOW Lower Band"] --> BONUS["+15 pts<br/>(Oversold bounce)"]
-    PRICE_MIDDLE["Price in MIDDLE"] --> NEUTRAL["0 pts<br/>(Normal)"]
-    
-    UPPER --> PRICE_ABOVE
-    LOWER --> PRICE_BELOW
-    MIDDLE --> PRICE_MIDDLE
-```
-
-**Plain English**: Bollinger Bands are like a rubber band. When price stretches too far above the band, it might snap back down. When it stretches below, it might bounce up.
-
----
-
-### 6.5 7-Day Price Change
-
-**What it measures**: Has the price already moved a lot this week?
-
-| Price Change | Score | Reasoning |
-|--------------|-------|-----------|
-| Dropped ≥20% | **+10 pts** | Deep dip — potential bargain |
-| Dropped 10-20% | **+5 pts** | Moderate dip — possible opportunity |
-| Rose 10-20% | **-5 pts** | Already rallied — some risk |
-| Rose ≥20% | **-10 pts** | Overextended — pullback likely |
-
-**Plain English**: Buy when there's "blood in the streets" (big drops). Be careful when everyone's already bought (big rallies).
-
----
-
-### 6.6 Volatility Spike Detection
-
-**What it measures**: Is trading activity suddenly much higher than normal?
-
-Since CoinGecko doesn't give us volume per candle, we use **price range** (high - low) as a proxy.
-
-| Condition | Score | Meaning |
-|-----------|-------|---------|
-| Volatility spike + price UP | **+10 pts** | Strong buying pressure |
-| Volatility spike + price DOWN | **-10 pts** | Strong selling pressure |
-
 ---
 
 ## 7. Scoring System
@@ -1241,9 +887,9 @@ flowchart TD
 
 **Understanding these assumptions is CRITICAL before trusting the output:**
 
-1. **Short-term focus only**: All indicators use 7-day data. This is for **swing trading** (days to weeks), NOT long-term investing.
+1. **Short-term focus only**: Indicators use **30-day** data (the 7-day change is measured from the last 7 days of that window). This is for **swing trading** (days to weeks), NOT long-term investing.
 
-2. **Technical analysis only**: No news, no team quality, no technology assessment, no regulatory considerations. A "BUY" signal doesn't mean the project is good.
+2. **Technical analysis only**: No team quality, no technology assessment, no regulatory considerations. A "BUY" signal doesn't mean the project is good. News sentiment is keyword-based only.
 
 3. **Past ≠ Future**: Technical analysis assumes patterns repeat. In crypto, patterns often break due to news events or manipulation.
 
@@ -1251,13 +897,13 @@ flowchart TD
 
 5. **Top coins only**: We analyze by market cap rank. Promising smaller coins are excluded.
 
-6. **Rate limits**: Free CoinGecko API has ~30 requests/minute. We add 2s delays. Fetching 50 coins takes ~5-6 minutes.
+6. **Rate limits**: The free CoinGecko tier allows ~10–30 calls/min. We add a 2s delay and retry 429s (honoring the `Retry-After` header). Fetching 50 coins can take several minutes and may include 60s waits. An API key removes most of this.
 
-7. **No volume data per candle**: We approximate "activity" using price range instead of actual trading volume.
+7. **No volume data per candle**: CoinGecko's OHLC endpoint returns **no volume**. "Volume spike" is therefore a **price-range volatility proxy** — it measures whether recent candles moved more than older ones, not traded volume.
 
-8. **No correlation analysis**: If Bitcoin crashes 10%, most altcoins follow regardless of their individual signals. We don't account for this.
+8. **Correlation is measured, not enforced**: We compute a correlation/diversification score and beta vs BTC, and show them in the report — but signals are **not** gated on the Bitcoin regime. If BTC drops, most alts still follow.
 
-9. **No exit strategy**: The agent says BUY or AVOID, but not WHEN to sell or how much to invest.
+9. **Exit levels are suggestions**: The report shows an ATR-based stop and a 2:1 take-profit, but the agent does not place orders, track positions, or manage a live trade.
 
 ---
 
@@ -1268,12 +914,14 @@ flowchart TD
 | Limitation | Why It Matters |
 |------------|----------------|
 | Cannot predict the future | No system can. Technical analysis improves odds, not guarantees. |
-| Ignores news & fundamentals | A coin with perfect technicals might crash from a hack or regulation. |
-| Ignores Bitcoin correlation | ~80% of altcoins move with BTC. If BTC drops, "BUY" picks likely drop too. |
+| News sentiment is shallow | Keyword/lexicon-based, not a trained model — nuance, sarcasm and context are missed. |
+| Bitcoin regime is not enforced | ~80% of altcoins move with BTC. Beta vs BTC is reported but does not gate signals. |
 | Doesn't know your risk tolerance | A volatile coin might be fine for one person, terrible for another. |
-| 7-day window is short | Long-term investors need months of data. |
-| Free API limits data quality | Professional traders use paid data feeds with real volume data. |
+| 30-day window is short | Long-term investors need months of data. The backtest covers one regime only. |
+| Signal edge decays | Backtests show BUY beats AVOID at ~1–3 days, but the edge can invert by 7 days. |
+| No real volume data | Free API OHLC has no per-candle volume; "volume spike" is a price-range proxy. |
 | Cannot detect manipulation | Crypto markets have pump-and-dump schemes. |
+| Free API limits data quality | Consumer-grade data and rate limits; professional traders use paid feeds. |
 
 ### ⚠️ Red Flags to Watch For
 
@@ -1289,9 +937,9 @@ flowchart TD
 ### Terminal Table Columns
 
 ```
-┌─────────┬──────────┬──────────────┬─────────┬─────────┬───────┬──────────┬───────────┬─────────┐
-│ Symbol  │ Name     │ Price        │ 24h %   │ 7d %    │ RSI   │ MACD     │ EMA Trend │ Score   │
-└─────────┴──────────┴──────────────┴─────────┴─────────┴───────┴──────────┴───────────┴─────────┘
+┌─────────┬──────────┬──────────────┬─────────┬─────────┬───────┬──────────┬───────────┬─────────┬────────┬────────┐
+│ Symbol  │ Name     │ Price        │ 24h %   │ 7d %    │ RSI   │ MACD     │ EMA Trend │ Score   │ Stop   │ Target │
+└─────────┴──────────┴──────────────┴─────────┴─────────┴───────┴──────────┴───────────┴─────────┴────────┴────────┘
 ```
 
 | Column | Meaning | What to Look For |
@@ -1304,6 +952,15 @@ flowchart TD
 | **MACD** | Momentum indicator | `↑ Cross` = bullish, `↓ Cross` = bearish |
 | **EMA Trend** | Short-term direction | `↑ Up` = rising, `↓ Down` = falling |
 | **Score** | Overall score | Higher = more bullish |
+| **Stop** | Suggested stop-loss distance (ATR-based, clamped 5%–50%) | Your exit if the trade goes wrong |
+| **Target** | Suggested take-profit distance (2:1 risk-reward) | Your exit if the trade works |
+
+For the top 5 coins in each section the report also prints explicit exit prices:
+`🛑 Stop-loss: -5.33% → exit at $94.67` and `🎯 Take-profit: +10.67% → exit at $110.67`.
+
+After the three category sections, the report ends with a **💼 Portfolio-Level Analysis**
+block (diversification score, overall risk, expected return, portfolio volatility/drawdown/Sharpe
+and rebalancing suggestions) and a disclaimer.
 
 ### Quick Decision Guide
 
@@ -1368,36 +1025,45 @@ crypto-agent/
 │   ├── types.ts              → TypeScript interfaces (data structures)
 │   │
 │   ├── fetcher/
-│   │   ├── coingecko.ts      → API calls, rate limiting, data fetching
-│   │   └── news.ts           → Free crypto news API integration
+│   │   ├── coingecko.ts      → API calls, API-key support, retry/backoff, OHLC window fallback
+│   │   └── news.ts           → Trending coins + project status updates (sentiment source)
 │   │
 │   ├── database/
-│   │   └── db.ts             → JSON file cache (save/load market data)
+│   │   └── db.ts             → JSON file cache (save/load, 7-day retention, 12-entry cap)
 │   │
 │   ├── analyzer/
 │   │   ├── indicators.ts     → Calculate RSI, MACD, EMA, Bollinger, volatility
-│   │   ├── advanced-indicators.ts → Ichimoku Cloud, ATR, ADX, Williams %R, CCI, Stochastic
-│   │   ├── risk-management.ts → Kelly Criterion, VaR, diversification analysis, stop-loss
-│   │   ├── ml-sentiment.ts   → TF-IDF vectorization, ensemble methods, advanced keyword matching
+│   │   ├── advanced-indicators.ts → Ichimoku Cloud, ATR, ADX (Wilder), Williams %R, CCI, Stochastic
+│   │   ├── risk-management.ts → Kelly Criterion, VaR, Sharpe, beta, portfolio analysis, stop/target
+│   │   ├── ml-sentiment.ts   → TF-IDF + ensemble sentiment scoring
+│   │   ├── sentiment-keywords.ts → Shared keyword lists + word-boundary matching
 │   │   ├── news-validator.ts → Validate technical analysis with news sentiment
+│   │   ├── backtest.ts       → Walk-forward backtest engine (point-in-time replay)
 │   │   └── classifier.ts     → Score coins and assign categories
 │   │
 │   ├── output/
-│   │   └── reporter.ts       → Terminal tables, colors, JSON export
+│   │   ├── reporter.ts       → Terminal tables, colors, JSON export (incl. portfolio)
+│   │   └── backtest-reporter.ts → Backtest tables + JSON export
 │   │
-│   ├── index.ts              → Main entry point
-│   └── scheduler.ts          → Cron scheduler for automated runs
+│   ├── index.ts              → Main entry point (analysis + report)
+│   ├── backtest.ts           → Backtest CLI entry point
+│   ├── __tests__/            → Test suite (Node built-in test runner, 60 tests)
+│   └── scheduler.ts          → Cron scheduler (runs from source and dist)
 │
 ├── data/
-│   └── market-cache.json     → Cached market data (auto-created)
+│   └── market-cache.json     → Cached market data (auto-created, gitignored)
 │
 ├── reports/
-│   └── report-*.json         → JSON reports (auto-created)
+│   ├── report-*.json         → Analysis reports (auto-created, gitignored)
+│   └── backtest-*.json       → Backtest reports (auto-created, gitignored)
 │
+├── .github/workflows/ci.yml  → CI: lint + build + tests
 ├── package.json              → Dependencies and scripts
 ├── tsconfig.json             → TypeScript configuration
-├── README.md                 → Quick start guide with enhanced features
-└── SPEC.md                   → This comprehensive specification
+├── eslint.config.mjs         → ESLint flat config
+├── LICENSE                   → ISC license
+├── README.md                 → Quick start guide
+└── Functional_Specification.md → This comprehensive specification
 ```
 
 ---
@@ -1496,9 +1162,14 @@ It's a math formula that tells you the optimal amount to bet based on your edge 
 - **Never risk more than 10%** on any single coin
 
 #### Dynamic Stop-Loss - "Automatic Safety Net"
-- **Base Stop-Loss**: 2x ATR (twice the normal volatility)
-- **Risk-Adjusted**: Modified by confidence score
-- **Minimum**: 5% stop-loss level
+- **ATR-based**: 2 × ATR below the entry price (falls back to 2 × *daily* volatility when ATR isn't available)
+- **Risk-Adjusted**: Widened for weak signals, tightened for strong ones (`× (1 − score/200)`)
+- **Clamped**: 5% minimum and 50% maximum — real crypto volatility would otherwise produce absurd >100% stops
+- **Take-Profit**: 2:1 risk-reward (target distance = 2 × stop distance)
+- **Surfaced in the report**: `Stop` / `Target` columns on every table, plus per-coin exit prices for the top 5 in each section
+
+> ⚠️ **Note:** stops are *suggested exit levels in the report* — the agent does not place
+> orders, track positions, or move stops to breakeven. There is no trailing stop yet.
 
 **What is a Stop-Loss?**
 It's like an automatic sell order that protects you from big losses.
@@ -1752,9 +1423,10 @@ Recommendation | News Sentiment | Alignment | Confidence
 3. **Bias** - News sources may have their own biases
 4. **Volume** - Some coins have little news coverage
 
-### 13.6 TODO: Future Enhancements
+### 13.6 Future Enhancements — Status & Roadmap
 
-The following features are planned for future implementation:
+Backtesting (13.6.3) is now **implemented** — see §13.12 for the engine and its results.
+The remaining planned features:
 
 #### 13.6.1 Real-time Features (TODO)
 - **WebSocket Integration**: Live price updates and streaming data
@@ -1766,10 +1438,11 @@ The following features are planned for future implementation:
 - **Signal Confirmation**: Multi-timeframe signal validation
 - **Trend Consistency**: Check trend alignment across timeframes
 
-#### 13.6.3 Backtesting Engine (TODO)
-- **Historical Testing**: Test strategies against historical data
-- **Performance Metrics**: Sharpe ratio, maximum drawdown, win rate
-- **Strategy Optimization**: Parameter tuning and optimization
+#### 13.6.3 Backtesting Engine (✅ IMPLEMENTED — see §13.12)
+- **Historical Testing**: Walk-forward replay of every candle through the live classifier ✅
+- **Performance Metrics**: Hit rate, average/median forward return, MAE/MFE, information ratio ✅
+- **Edge Measurement**: BUY − AVOID and BUY − ALL spreads per horizon ✅
+- **Strategy Optimization**: Not automated yet — classifier weights remain hand-tuned ⏳
 
 #### 13.6.4 Customizable Strategies (TODO)
 - **Strategy Builder**: Create custom trading strategies
@@ -1785,14 +1458,17 @@ The following features are planned for future implementation:
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| **Advanced Technical Indicators** | ✅ Complete | Ichimoku Cloud, ATR, ADX, Williams %R, CCI, Stochastic |
-| **Advanced Risk Management** | ✅ Complete | Kelly Criterion, VaR, diversification analysis |
-| **ML Enhanced Sentiment Analysis** | ✅ Complete | TF-IDF, ensemble methods, comprehensive keywords |
-| **Portfolio Analysis** | ✅ Complete | Risk metrics, rebalancing recommendations |
-| **News Validation** | ✅ Complete | ML-enhanced sentiment with alignment scoring |
+| **Advanced Technical Indicators** | ✅ Complete | Ichimoku Cloud (high/low based), ATR, Wilder-smoothed ADX, Williams %R, CCI, Stochastic (real %K/%D) |
+| **Advanced Risk Management** | ✅ Complete | Kelly sizing, daily VaR, annualized Sharpe, beta vs BTC, ATR-based clamped stop-loss + 2:1 take-profit |
+| **ML Enhanced Sentiment Analysis** | ⚠️ Partial | Lexicon + TF-IDF ensemble (not a trained model) with word-boundary matching |
+| **Portfolio Analysis** | ✅ Complete | Diversification score, correlation, rebalancing suggestions, portfolio risk metrics |
+| **News Validation** | ⚠️ Partial | Keyword-based sentiment over trending coins and project status updates |
+| **Backtesting Engine** | ✅ Complete | Point-in-time replay, forward returns, MAE/MFE, BUY-vs-AVOID edge |
+| **Automated Tests & CI** | ✅ Complete | 60 tests (Node test runner), ESLint, GitHub Actions |
+| **Configurable Strategy Weights** | ⏳ TODO | Weights currently hardcoded in `classifier.ts` |
+| **Real per-candle volume** | ⏳ TODO | Would replace the price-range "volume spike" proxy (`/market_chart` returns volumes) |
 | **Real-time Features** | ⏳ TODO | WebSocket, alerts, live dashboard |
 | **Multi-timeframe Analysis** | ⏳ TODO | Cross-timeframe validation and correlation |
-| **Backtesting Engine** | ⏳ TODO | Historical testing and performance metrics |
 | **Customizable Strategies** | ⏳ TODO | Strategy builder and risk profiles |
 | **Exchange Integration** | ⏳ TODO | API connections and automated trading |
 
@@ -1897,6 +1573,180 @@ This enhanced specification provides a complete understanding of how the crypto 
 
 ---
 
+### 13.12 Signal Backtesting — "Does This Actually Work?"
+
+Before this feature existed, every weight in the scoring system (RSI ±30/20/10, MACD ±25,
+EMA ±15, Bollinger ±15, 7-day ±10) was a **hand-picked guess that had never been measured**.
+The backtest engine answers the only question that matters: *do the BUY signals actually
+outperform the AVOID signals?*
+
+```bash
+npm run backtest                              # replay cached 30-day data
+npm run backtest -- --refresh --limit=25      # bigger sample
+npm run backtest -- --horizons=1,3,7          # custom forward horizons (days)
+npm run backtest -- --step=2                  # evaluate every 2nd candle (faster)
+npm run backtest -- --outcomes                # include every raw signal in the JSON
+```
+
+#### How the replay avoids cheating
+
+```mermaid
+flowchart LR
+    CANDLES["📊 180 candles per coin"] --> LOOP{"For each candle i"}
+    LOOP --> PIT["🕰️ Rebuild point-in-time view<br/>(only candles 0..i — no future data)"]
+    PIT --> SCORE["🧮 Run the LIVE classifier<br/>on that snapshot"]
+    SCORE --> FWD["📈 Measure forward returns<br/>+1d / +3d / +7d"]
+    FWD --> EXC["⚠️ Measure MAE / MFE<br/>worst & best excursion"]
+    EXC --> AGG["📋 Aggregate by category<br/>BUY vs WATCHLIST vs AVOID"]
+```
+
+The critical detail: prices and the 24h/7d percentages are **re-derived from the truncated
+candle history**, never taken from the cached live values. Reusing "today's" percentages for a
+signal generated three weeks ago would leak the future into the past and make the whole
+exercise meaningless. A unit test corrupts every future candle and asserts the historical
+snapshot is unchanged, so this cannot silently regress.
+
+#### Metrics reported
+
+| Metric | Meaning |
+|--------|---------|
+| **Hit rate** | Share of signals followed by a positive return |
+| **Avg / median return** | Mean and middle forward return per horizon |
+| **MAE** | Average worst drawdown from entry within the horizon (risk taken) |
+| **MFE** | Average best upside reached (opportunity available) |
+| **IR** | mean ÷ std of forward returns — higher means more consistent |
+| **BUY − AVOID** | The key edge metric. Positive ⇒ the ranking has predictive power |
+| **BUY − ALL** | Edge versus picking a coin at random |
+
+
+#### Illustrative result (25 coins, 2,333 signals)
+
+| Category | Samples | Hit 1d | Avg 1d | Hit 3d | Avg 3d | Hit 7d | Avg 7d | Avg MAE |
+|---|---|---|---|---|---|---|---|---|
+| **BUY** | 342 | 45% | +0.18% | 47% | **+0.88%** | 46% | +1.76% | **−3.27%** |
+| WATCHLIST | 1,248 | 50% | +0.33% | 50% | +0.68% | 50% | +1.85% | −4.41% |
+| **AVOID** | 743 | 42% | −0.02% | 43% | +0.66% | 49% | **+2.52%** | −4.63% |
+
+```
+1d   BUY − AVOID: +0.20%   ✓ edge
+3d   BUY − AVOID: +0.22%   ✓ edge
+7d   BUY − AVOID: −0.76%   ✗ edge INVERTS
+```
+
+**What this tells us:**
+1. **The signals work, but briefly.** BUY beats AVOID at 1–3 days, then **inverts by 7 days** —
+   holding these signals for a week performed worse than doing nothing in that window.
+2. **The risk side is validated.** BUY picks had the smallest average drawdown (−3.27% vs
+   −4.63% for AVOID), so the tool genuinely selects lower-risk entries.
+3. **Regime dominates.** Every category rose over 7 days in that window (a broad uptrend),
+   which is exactly why the *relative* spread matters more than absolute returns.
+
+> ⚠️ **Honest limitations:** ~2,300 heavily **overlapping** samples from a **single 30-day
+> regime** is *indicative, not statistical proof*. Reports are written to `reports/backtest-*.json`.
+> Use this as a tuning aid, not a validated trading strategy.
+
+---
+
+### 13.13 Corrected Quantitative Definitions
+
+Several metrics in earlier versions of this specification were described loosely. These are the
+precise definitions the code now uses:
+
+| Metric | Definition used in code |
+|--------|-------------------------|
+| **Volatility** | Std-dev of per-period returns × √periods per year (period length inferred from candle timestamps) |
+| **Daily volatility** | Std-dev of per-period returns × √(periods per day) — used for stops |
+| **Sharpe ratio** | (annualized return − 2% risk-free) ÷ annualized volatility |
+| **VaR 95%** | 1.645 × **daily** volatility (a daily loss estimate, not annualized) |
+| **Beta** | cov(coin returns, BTC returns) ÷ var(BTC returns), aligned on the shortest common series |
+| **Kelly position size** | (b·p − q)/b with b = 1; capped at 10%, floored at 1%, and **0 when there is no edge** |
+| **Stop-loss** | ATR path: 2 × ATR ÷ price; fallback: 2 × daily volatility; × (1 − score/200); clamped 5%–50% |
+| **Take-profit** | 2 × stop distance (2:1 risk-reward) |
+| **ADX** | Wilder-smoothed DI+/DI− → DX → Wilder-averaged DX (not a simple average) |
+| **Stochastic** | %K series → %D = SMA(%K, 3) → signal = SMA(%D, 3) |
+| **Ichimoku** | Conversion/Base/Leading Span B from **highs and lows** (not closes); needs 52 candles |
+| **Max drawdown** | Largest peak-to-trough decline over the candle series |
+| **Volume spike** | ⚠️ **Price-range proxy** — recent candle ranges vs older ones. CoinGecko OHLC has no volume |
+
+Two definitions deserve emphasis because they are easy to misread in the report:
+
+- **The "portfolio" analysis is a market simulation, not your holdings.** `totalValue` is the
+  summed market cap of the analyzed coins, and weights are cap-weighted. It answers "how would a
+  market-cap-weighted basket of these coins look?" — not "how is *my* portfolio doing?"
+- **The "volume spike" signal is not volume.** Free-tier OHLC returns no volume, so the signal
+  measures whether recent candles *moved* more than older ones. Treat it as a volatility burst.
+
+---
+
+
+## 14. Testing, CI & Configuration
+
+### Automated tests
+
+The suite runs on Node's built-in test runner (no extra framework) with **60 tests**:
+
+```bash
+npm test        # build + run all tests
+npm run lint    # ESLint (flat config)
+npm run build   # compile to dist/
+```
+
+| Test file | Covers |
+|-----------|--------|
+| `indicators.test.ts` | RSI/MACD/EMA/Bollinger ranges, insufficient-data guards |
+| `advanced-indicators.test.ts` | Ichimoku high/low use, ADX smoothing bounds, %D ≠ %K, Williams %R range |
+| `risk-management.test.ts` | Empty-OHLC crash regression, Sharpe/VaR time-correctness, beta ≈ 1 and ≈ 2 on constructed series, Kelly edge cases, stop-loss ATR/floor/ceiling |
+| `backtest.test.ts` | Look-ahead-bias guard, exact sample counts, forward-return & excursion recomputation, spread math |
+| `classifier.test.ts` | Contrarian categorization (oversold ⇒ BUY, overbought rally ⇒ AVOID), score clamping |
+| `ml-sentiment.test.ts` | 0–1 confidence contract, alignment, neutral fallback |
+| `sentiment-keywords.test.ts` | Word-boundary matching (no "up" inside "upgrade") |
+| `fetcher.test.ts` | **Flat query params** (the 422 regression), 422 window fallback, 429 `Retry-After` |
+| `db.test.ts` | Save/load, entry cap, retention cleanup |
+
+**Notable regression tests** — these exist because the bugs actually shipped at some point:
+
+1. A coin with **no OHLC data** (rate-limited fetch) must not crash the run.
+2. Query params must be sent **flat** (`vs_currency=usd`), not double-nested (`params[vs_currency]`).
+3. The stop-loss must stay inside the 5%–50% band (it previously used *annualized* volatility,
+   producing >100% stops).
+4. Historical snapshots must not contain **future candle data**.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs **lint → build → tests** on every push and pull request to `main`.
+
+### Configuration reference
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `COINGECKO_API_KEY` | _(none)_ | Demo/pro API key — raises rate limits substantially |
+| `COINGECKO_API_TIER` | `demo` | Header type: `demo` (`x-cg-demo-api-key`) or `pro` (`x-cg-pro-api-key`) |
+| `COINGECKO_BASE_URL` | `https://api.coingecko.com/api/v3` | API base URL (used by tests) |
+| `FETCH_DELAY_MS` | `2000` | Gap between CoinGecko calls |
+| `CRYPTO_AGENT_DATA_DIR` | `./data` | Where the market cache is stored |
+| `CRON_SCHEDULE` | `0 8 * * *` | Scheduler cron expression |
+
+### npm scripts
+
+| Script | Command | What it does |
+|--------|---------|--------------|
+| `npm run dev` | `ts-node src/index.ts` | Run the analysis and print the report |
+| `npm run backtest` | `ts-node src/backtest.ts` | Replay history and measure signal edge |
+| `npm run schedule` | `ts-node src/scheduler.ts` | Cron-scheduled runs |
+| `npm test` | `tsc && node --test` | Build and run the test suite |
+| `npm run lint` | `eslint src` | Static analysis |
+
+### Known gaps
+
+- **No real volume data** — the free OHLC endpoint has none; `/market_chart` does (verified: 721
+  hourly volume points for BTC over 30 days), so per-candle volume is achievable.
+- **Strategy weights are hardcoded** in `classifier.ts` — the backtest now provides the
+  measurement needed to tune them responsibly.
+- **BTC regime is not enforced** — beta is computed and reported but does not gate BUY signals.
+- **No position tracking** — stops/targets are suggestions; there is no trailing stop, no live
+  P&L, and no order placement.
+
+---
 ## Final Reminder
 
 ```

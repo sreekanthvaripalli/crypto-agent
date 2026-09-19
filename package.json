@@ -8,6 +8,7 @@
     "start": "ts-node src/index.ts",
     "dev": "ts-node src/index.ts",
     "schedule": "ts-node src/scheduler.ts",
+    "backtest": "ts-node src/backtest.ts",
     "test": "npm run build && node --test --test-concurrency=1 \"dist/__tests__/**/*.test.js\"",
     "lint": "eslint src"
   },

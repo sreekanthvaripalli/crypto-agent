@@ -137,3 +137,62 @@ export interface PortfolioAnalysis {
     sharpeRatio: number;
   };
 }
+
+// ─── Backtesting ─────────────────────────────────────────────────────────────
+
+export interface BacktestOutcome {
+  coinId: string;
+  symbol: string;
+  /** Candle timestamp at which the signal was generated */
+  timestamp: number;
+  category: SignalCategory;
+  score: number;
+  /** Forward return per horizon key (e.g. "1d", "7d"), as a fraction */
+  forwardReturns: Record<string, number>;
+  /** Worst return-to-low within the longest horizon (negative fraction) */
+  maxAdverseExcursion: number;
+  /** Best return-to-high within the longest horizon (positive fraction) */
+  maxFavorableExcursion: number;
+}
+
+export interface HorizonStats {
+  horizon: string;
+  samples: number;
+  /** Share of samples with a positive forward return */
+  hitRate: number;
+  avgReturn: number;
+  medianReturn: number;
+  /** mean / std of forward returns (per-signal information ratio) */
+  signalIr: number;
+}
+
+export interface BacktestCategoryStats {
+  category: SignalCategory;
+  samples: number;
+  avgMaxAdverseExcursion: number;
+  avgMaxFavorableExcursion: number;
+  horizons: HorizonStats[];
+}
+
+export interface BacktestSpread {
+  horizon: string;
+  /** avgReturn(BUY) − avgReturn(AVOID); positive means the ranking works */
+  buyMinusAvoid: number;
+  /** avgReturn(BUY) − avgReturn(all samples); the edge over picking at random */
+  buyMinusAll: number;
+}
+
+export interface BacktestReport {
+  generatedAt: Date;
+  coinsAnalyzed: number;
+  coinsSkipped: number;
+  samples: number;
+  /** 4-hourly candles => 6 per day */
+  candlesPerDay: number;
+  warmupCandles: number;
+  horizonsInDays: number[];
+  stats: BacktestCategoryStats[];
+  spreads: BacktestSpread[];
+  /** Raw per-signal outcomes (only when explicitly requested) */
+  outcomes?: BacktestOutcome[];
+}
