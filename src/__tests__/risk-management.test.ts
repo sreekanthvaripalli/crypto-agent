@@ -164,3 +164,55 @@ test('portfolio analysis returns zeros for an empty list', () => {
   assert.equal(result.totalValue, 0);
   assert.equal(result.overallRisk, 'medium');
 });
+
+test('stop-loss is ATR-based when ATR is available (2× ATR below entry)', () => {
+  const base = coin(makeCandles(180, (i) => 100 + Math.sin(i / 5) * 3));
+  const withAtr: EnhancedCoinAnalysis = { ...base, advancedIndicators: { atr: 6 } };
+  const metrics = rm.calculateRiskMetrics(withAtr);
+  const expected = Math.min(0.5, Math.max(0.05, (2 * 6) / base.coin.currentPrice));
+  assert.ok(
+    Math.abs(metrics.stopLossLevel - expected) < 1e-9,
+    `expected ATR stop ${expected}, got ${metrics.stopLossLevel}`
+  );
+  assert.ok(Math.abs(metrics.takeProfitLevel - 2 * expected) < 1e-9);
+});
+
+test('stop-loss falls back to daily volatility and stays within the 5%–50% band', () => {
+  const metrics = rm.calculateRiskMetrics(coin(makeCandles(180, (i) => 100 + Math.sin(i / 5) * 3)));
+  // Regression guard for the old bug: the stop used 2× ANNUALIZED volatility,
+  // which produced absurd >100% stops on real crypto data.
+  assert.ok(metrics.stopLossLevel <= 0.5, `stop must be <= 50%, got ${metrics.stopLossLevel}`);
+  assert.ok(metrics.stopLossLevel >= 0.05, `stop must be >= 5%, got ${metrics.stopLossLevel}`);
+  assert.equal(metrics.takeProfitLevel, metrics.stopLossLevel * 2);
+});
+
+test('higher volatility widens the stop-loss (and respects the 50% ceiling)', () => {
+  // Series built from explicit per-period returns so the unclamped stop
+  // distances land inside the 5%–50% band (low-vol series clamp to the floor).
+  const mk = (amp: number) =>
+    seriesFromReturns(Array.from({ length: 179 }, (_, i) => amp * Math.sin(i / 3)));
+  const calmStop = rm.calculateRiskMetrics(coin(mk(0.001))).stopLossLevel;
+  const wildStop = rm.calculateRiskMetrics(coin(mk(0.03))).stopLossLevel;
+  const extremeStop = rm.calculateRiskMetrics(coin(mk(0.10))).stopLossLevel;
+  const cappedStop = rm.calculateRiskMetrics(coin(mk(0.15))).stopLossLevel;
+  assert.equal(calmStop, 0.05); // calm series hits the 5% floor
+  assert.ok(wildStop > calmStop && wildStop < 0.5, `wild stop out of band: ${wildStop}`);
+  assert.ok(extremeStop > wildStop, `extreme ${extremeStop} should exceed wild ${wildStop}`);
+  assert.equal(cappedStop, 0.5); // extreme series hits the 50% ceiling
+});
+
+test('bullish coins get tighter stops than bearish ones (confidence adjustment)', () => {
+  // Base stop ≈ 17% so the ×0.6 / ×1.4 score adjustment isn't swallowed by the floor
+  const candles = seriesFromReturns(
+    Array.from({ length: 179 }, (_, i) => 0.05 * Math.sin(i / 3))
+  );
+  const bull = rm.calculateRiskMetrics(coin(candles, 80)).stopLossLevel;
+  const bear = rm.calculateRiskMetrics(coin(candles, -80)).stopLossLevel;
+  assert.ok(bull < bear, `bull stop ${bull} should be tighter than bear stop ${bear}`);
+  assert.ok(bull >= 0.05 && bear <= 0.5);
+});
+
+test('take-profit maintains the 2:1 risk-reward ratio', () => {
+  const metrics = rm.calculateRiskMetrics(coin(makeCandles(180, (i) => 100 + Math.sin(i / 5) * 3)));
+  assert.ok(Math.abs(metrics.takeProfitLevel - 2 * metrics.stopLossLevel) < 1e-12);
+});

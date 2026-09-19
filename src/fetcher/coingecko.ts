@@ -1,7 +1,8 @@
 import axios, { AxiosInstance } from 'axios';
 import { CoinMarketData, OHLCCandle } from '../types';
 
-const BASE_URL = 'https://api.coingecko.com/api/v3';
+// Base URL can be overridden for tests (COINGECKO_BASE_URL)
+const BASE_URL = process.env.COINGECKO_BASE_URL || 'https://api.coingecko.com/api/v3';
 
 // Optional API key. Set COINGECKO_API_KEY to raise rate limits;
 // COINGECKO_API_TIER selects the header type ('demo' | 'pro').
@@ -27,26 +28,103 @@ const client: AxiosInstance = axios.create({
 });
 
 /**
- * GET with retry + exponential backoff on 429 (rate limited).
+ * GET with retry + backoff for transient failures:
+ * - 429 (rate limited): back off 60s × attempt
+ * - 5xx / network errors: back off 3s × attempt
+ * Other 4xx errors throw immediately (bad request, not transient).
+ *
+ * IMPORTANT: `params` is the flat query-param map — e.g.
+ * getWithRetry('/coins/markets', { vs_currency: 'usd' }) → ?vs_currency=usd
+ * (Passing an axios config object here double-nests the params!)
  */
-async function getWithRetry(url: string, params?: Record<string, unknown>): Promise<any> {
+async function getWithRetry(url: string, params: Record<string, unknown> = {}): Promise<any> {
   let lastError: unknown;
+
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       return await client.get(url, { params });
     } catch (err) {
       lastError = err;
-      const status = (err as { response?: { status?: number } }).response?.status;
-      if (status === 429 && attempt < MAX_RETRIES) {
-        const backoffMs = 60000 * attempt;
-        console.log(`\n⚠️  Rate limited (429). Waiting ${backoffMs / 1000}s before retry ${attempt + 1}/${MAX_RETRIES}...`);
+      const e = err as {
+        response?: { status?: number; headers?: Record<string, unknown> };
+        code?: string;
+        message?: string;
+      };
+      const status = e.response?.status;
+      const retriable =
+        status === 429 || (typeof status === 'number' && status >= 500) || (!status && !!e.code);
+
+      if (retriable && attempt < MAX_RETRIES) {
+        // Honor the server's Retry-After on 429 so we wait exactly as long
+        // as required instead of a fixed 60s per attempt.
+        const backoffMs =
+          status === 429
+            ? retryAfterMs(e.response?.headers ?? {}, 60000 * attempt)
+            : 3000 * attempt;
+        console.log(
+          `\n⚠️  ${status ?? e.code} on ${url} (attempt ${attempt}/${MAX_RETRIES}). Retrying in ${(backoffMs / 1000).toFixed(1)}s...`
+        );
         await sleep(backoffMs);
       } else {
-        throw err;
+        throw enrichError(err, url);
       }
     }
   }
-  throw lastError;
+
+  throw enrichError(lastError, url);
+}
+
+/**
+ * Resolve the wait time for a 429 from the Retry-After header.
+ * Accepts either seconds ("30") or an HTTP-date, capped at 120s,
+ * falling back to the supplied default when the header is absent/invalid.
+ */
+function retryAfterMs(headers: Record<string, unknown>, fallbackMs: number): number {
+  const MAX_WAIT_MS = 120_000;
+  const raw = headers['retry-after'] ?? headers['Retry-After'];
+
+  if (typeof raw === 'string' && raw.trim().length > 0) {
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(seconds * 1000, MAX_WAIT_MS);
+    }
+    const dateMs = Date.parse(raw);
+    if (!Number.isNaN(dateMs)) {
+      return Math.max(0, Math.min(dateMs - Date.now(), MAX_WAIT_MS));
+    }
+  }
+
+  return fallbackMs;
+}
+
+/**
+ * Attach status, endpoint and API error detail to the error message so
+ * failures are self-explanatory in the logs.
+ */
+function enrichError(err: unknown, url: string): Error {
+  const e = err as {
+    response?: { status?: number; data?: unknown };
+    message?: string;
+    code?: string;
+  };
+  const data = e.response?.data;
+  let apiDetail = '';
+  if (typeof data === 'object' && data !== null && 'error' in data) {
+    apiDetail = String((data as { error: unknown }).error);
+  } else if (typeof data === 'string' && data.length > 0) {
+    apiDetail = data.slice(0, 200);
+  }
+  const label = e.response ? `HTTP ${e.response.status}` : e.code ?? 'network error';
+  const detail = apiDetail ? ` — ${apiDetail}` : '';
+  const enriched = new Error(`${e.message ?? String(err)} [${label} on ${url}${detail}]`) as Error & {
+    response?: { status?: number; data?: unknown };
+    code?: string;
+  };
+  // Preserve the original response/code so callers (e.g. the OHLC window
+  // fallback ladder) can still branch on the HTTP status.
+  enriched.response = e.response;
+  enriched.code = e.code;
+  return enriched;
 }
 
 /**
@@ -56,14 +134,12 @@ export async function fetchTopCoins(limit: number = 50): Promise<CoinMarketData[
   console.log(`📡 Fetching top ${limit} coins from CoinGecko...`);
 
   const response = await getWithRetry('/coins/markets', {
-    params: {
-      vs_currency: 'usd',
-      order: 'market_cap_desc',
-      per_page: limit,
-      page: 1,
-      sparkline: false,
-      price_change_percentage: '24h,7d',
-    },
+    vs_currency: 'usd',
+    order: 'market_cap_desc',
+    per_page: limit,
+    page: 1,
+    sparkline: false,
+    price_change_percentage: '24h,7d',
   });
 
   return response.data.map((coin: any): CoinMarketData => ({
@@ -82,27 +158,40 @@ export async function fetchTopCoins(limit: number = 50): Promise<CoinMarketData[
 }
 
 /**
- * Fetch 30-day OHLC data for a specific coin.
- * CoinGecko returns 4-hourly candles for 3-30 day windows (~180 candles),
- * which is enough history for long-period indicators like Ichimoku (52)
- * and properly smoothed ADX (2×14).
+ * Fetch 30-day OHLC data for a coin, falling back to shorter windows
+ * (14d, then 7d) if the API tier rejects the 30-day window, so that
+ * data always flows.
  */
 export async function fetchOHLC(coinId: string): Promise<OHLCCandle[]> {
-  const response = await getWithRetry(`/coins/${coinId}/ohlc`, {
-    params: {
-      vs_currency: 'usd',
-      days: 30,
-    },
-  });
+  const windows = [30, 14, 7];
+  let lastError: unknown;
 
-  // Response format: [timestamp, open, high, low, close]
-  return response.data.map((candle: any[]): OHLCCandle => ({
-    timestamp: candle[0],
-    open: candle[1],
-    high: candle[2],
-    low: candle[3],
-    close: candle[4],
-  }));
+  for (const days of windows) {
+    try {
+      const response = await getWithRetry(`/coins/${coinId}/ohlc`, {
+        vs_currency: 'usd',
+        days,
+      });
+
+      // Response format: [timestamp, open, high, low, close]
+      return response.data.map((candle: any[]): OHLCCandle => ({
+        timestamp: candle[0],
+        open: candle[1],
+        high: candle[2],
+        low: candle[3],
+        close: candle[4],
+      }));
+    } catch (err) {
+      lastError = err;
+      const status = (err as { response?: { status?: number } }).response?.status;
+      // A 422 on the window size means this API tier doesn't allow it —
+      // try a shorter window. Anything else is not window-related.
+      if (status !== 422) break;
+      console.log(`  ⚠️  days=${days} rejected for ${coinId} — trying a shorter window...`);
+    }
+  }
+
+  throw lastError;
 }
 
 /**
@@ -113,7 +202,7 @@ export async function fetchFullMarketData(limit: number = 50): Promise<CoinMarke
   const coins = await fetchTopCoins(limit);
   const fullData: CoinMarketData[] = [];
 
-  console.log(`📊 Fetching 7-day OHLC data for ${coins.length} coins...`);
+  console.log(`📊 Fetching 30-day OHLC data for ${coins.length} coins...`);
 
   for (let i = 0; i < coins.length; i++) {
     const coin = coins[i];

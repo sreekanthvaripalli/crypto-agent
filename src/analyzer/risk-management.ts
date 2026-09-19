@@ -45,9 +45,11 @@ export class RiskManager {
     // Position sizing using Kelly Criterion
     const positionSize = this.calculatePositionSize(coin, sharpeRatio, volatility);
 
-    // Stop loss and take profit levels
-    const stopLossLevel = this.calculateStopLoss(coin, volatility);
-    const takeProfitLevel = this.calculateTakeProfit(coin, volatility);
+    // Stop loss / take profit levels (daily-scale + ATR-based — NOT annualized;
+    // annualized vol would produce absurd >100% stops)
+    const dailyVolatility = this.calculateDailyVolatility(returns, periodsPerYear);
+    const stopLossLevel = this.calculateStopLoss(coin, dailyVolatility);
+    const takeProfitLevel = this.calculateTakeProfit(coin, dailyVolatility);
 
     return {
       volatility,
@@ -167,6 +169,15 @@ export class RiskManager {
     return Math.sqrt(variance) * Math.sqrt(periodsPerYear);
   }
 
+  /**
+   * Daily volatility from per-period returns (periodsPerYear/365 periods per day).
+   * Used for stop-loss sizing — stops must be on a daily time scale.
+   */
+  private calculateDailyVolatility(returns: number[], periodsPerYear: number): number {
+    const periodsPerDay = Math.max(1, periodsPerYear / 365);
+    return this.calculateVolatility(returns, periodsPerDay);
+  }
+
   private calculateMaxDrawdown(candles: OHLCCandle[]): number {
     if (candles.length === 0) return 0;
     let maxDrawdown = 0;
@@ -259,18 +270,38 @@ export class RiskManager {
     return Math.max(riskAdjustedSize, 0.01); // Minimum 1% for positive edge
   }
 
-  private calculateStopLoss(coin: EnhancedCoinAnalysis, volatility: number): number {
-    // Dynamic stop loss based on volatility and risk tolerance
-    const baseStopLoss = volatility * 2; // 2x volatility
-    const riskAdjustedStopLoss = baseStopLoss * (1 - coin.score / 200); // Adjust based on confidence
-    
-    return Math.max(riskAdjustedStopLoss, 0.05); // Minimum 5% stop loss
+  /**
+   * Dynamic stop-loss as a fraction below entry price:
+   * - ATR-based when available: 2× ATR distance from entry (standard
+   *   volatility stop — matches the documented behavior)
+   * - otherwise 2× DAILY volatility (annualized vol gives absurd >100% stops)
+   * - widened for weak technical signals (low/negative score)
+   * - clamped to a sane 5%–50% band
+   */
+  private calculateStopLoss(coin: EnhancedCoinAnalysis, dailyVolatility: number): number {
+    const price = coin.coin.currentPrice;
+    const atr = coin.advancedIndicators?.atr;
+
+    let stopPercent: number;
+    if (atr && atr > 0 && price > 0) {
+      // ATR-multiple stop: 2× ATR below entry
+      stopPercent = (2 * atr) / price;
+    } else {
+      // 2× daily volatility fallback
+      stopPercent = 2 * dailyVolatility;
+    }
+
+    // Weak signals -> wider stop; strong signals -> tighter
+    stopPercent *= 1 - coin.score / 200;
+
+    return Math.min(0.5, Math.max(0.05, stopPercent)); // clamp to 5%–50%
   }
 
-  private calculateTakeProfit(coin: EnhancedCoinAnalysis, volatility: number): number {
-    // Risk-reward ratio of 2:1
-    const stopLoss = this.calculateStopLoss(coin, volatility);
-    return stopLoss * 2;
+  /**
+   * Take-profit at a 2:1 risk-reward ratio above the stop distance.
+   */
+  private calculateTakeProfit(coin: EnhancedCoinAnalysis, dailyVolatility: number): number {
+    return this.calculateStopLoss(coin, dailyVolatility) * 2;
   }
 
   private calculateCorrelation(returns1: number[], returns2: number[]): number {

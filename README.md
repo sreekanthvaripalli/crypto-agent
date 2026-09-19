@@ -18,7 +18,8 @@ A professional-grade crypto market analysis agent that checks the top 50 coins b
 - **Kelly Criterion Position Sizing** - Mathematical approach to optimal position sizing
 - **Value at Risk (VaR)** - 95% confidence level risk measurement
 - **Portfolio Diversification Analysis** - Correlation matrix and diversification scoring
-- **Dynamic Stop-Loss** - ATR-based with confidence score adjustments
+- **Dynamic Stop-Loss** - ATR-based (2× ATR below entry, daily-volatility fallback) with confidence score adjustments, clamped to a sane 5%–50% band
+- **Take-Profit Targets** - 2:1 risk-reward ratio above the stop distance, shown per coin
 - **Risk-Adjusted Returns** - Sharpe ratio and portfolio volatility analysis
 
 ### 🤖 Machine Learning Enhanced Sentiment Analysis
@@ -60,7 +61,7 @@ A professional-grade crypto market analysis agent that checks the top 50 coins b
   - Kelly Criterion position sizing
   - Value at Risk (VaR) calculation
   - Portfolio diversification scoring
-  - Dynamic stop-loss optimization
+  - Dynamic stop-loss / take-profit levels (ATR-based, 2:1 risk-reward) shown per coin
 - **ML-Enhanced Sentiment Analysis**:
   - TF-IDF vectorization
   - Ensemble methods (keyword, TF-IDF, context)
@@ -120,6 +121,7 @@ npm run dev -- --refresh --limit=100
 |---|---|---|
 | `COINGECKO_API_KEY` | _(none)_ | CoinGecko demo/pro API key — raises rate limits (recommended) |
 | `COINGECKO_API_TIER` | `demo` | Key type: `demo` (`x-cg-demo-api-key`) or `pro` (`x-cg-pro-api-key`) |
+| `COINGECKO_BASE_URL` | `https://api.coingecko.com/api/v3` | API base URL (overridable for tests/proxies) |
 | `FETCH_DELAY_MS` | `2000` | Delay between CoinGecko calls (rate limiting) |
 | `CRYPTO_AGENT_DATA_DIR` | `./data` | Where the market cache JSON is stored |
 | `CRON_SCHEDULE` | `0 8 * * *` | Scheduler cron expression |
@@ -209,6 +211,31 @@ crypto-agent/
 - 🟢 **BUY**: Score ≥ +25
 - 🟡 **WATCHLIST**: Score between -25 and +25
 - 🔴 **AVOID**: Score ≤ -25
+
+---
+
+## 🔧 Troubleshooting
+
+**`HTTP 422 — Missing parameter vs_currency`**
+This was a bug in the fetch layer (query params were nested as `params[vs_currency]`), fixed and covered by a regression test. Run `npm test` to confirm.
+
+**`HTTP 429 — rate limited`**
+CoinGecko's free tier allows only ~10–30 calls/min. The agent now:
+1. waits for the exact duration in the server's `Retry-After` header (falling back to 60s × attempt),
+2. retries up to 3 times, then
+3. skips the coin (the run still completes; the coin just has no candle data).
+
+For reliable runs over the top 50 coins, set a free API key — it raises the limits substantially:
+```bash
+COINGECKO_API_KEY=CG-xxxxxxxx npm run dev -- --refresh
+```
+You can also raise the gap between calls with `FETCH_DELAY_MS=4000`.
+
+**Fetching feels slow**
+Each coin needs one OHLC call and the loop is deliberately sequential to respect rate limits. With an API key you can safely lower `FETCH_DELAY_MS` to `500`–`1000`.
+
+**"Using cached data" when I want fresh prices**
+Cached snapshots are valid for 4 hours. Pass `--refresh` to force a live fetch.
 
 ---
 

@@ -98,14 +98,14 @@ export interface StochasticOscillator {
 }
 
 export interface RiskMetrics {
-  volatility: number;
-  maxDrawdown: number;
-  sharpeRatio: number;
-  var95: number;
-  beta: number;
-  positionSize: number;
-  stopLossLevel: number;
-  takeProfitLevel: number;
+  volatility: number;      // annualized
+  maxDrawdown: number;     // fraction of peak (0.5 = 50%)
+  sharpeRatio: number;     // annualized
+  var95: number;           // daily VaR at 95% (fraction, e.g. 0.06 = 6%)
+  beta: number;            // vs BTC market proxy (1.0 fallback)
+  positionSize: number;    // fraction of capital (Kelly-derived)
+  stopLossLevel: number;   // fraction below entry (0.08 = -8% stop)
+  takeProfitLevel: number; // fraction above entry (2:1 risk-reward)
 }
 
 export interface PortfolioImpact {

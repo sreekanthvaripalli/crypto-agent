@@ -1,6 +1,6 @@
 import chalk, { ChalkInstance } from 'chalk';
 import Table from 'cli-table3';
-import { CoinAnalysis, MarketReport, EnhancedCoinAnalysis, PortfolioAnalysis } from '../types';
+import { MarketReport, EnhancedCoinAnalysis, PortfolioAnalysis } from '../types';
 import fs from 'fs';
 import path from 'path';
 
@@ -44,7 +44,7 @@ function formatRSI(rsi: number | null): string {
   return chalk.white(str);
 }
 
-function buildSummaryTable(analyses: CoinAnalysis[]): string {
+function buildSummaryTable(analyses: EnhancedCoinAnalysis[]): string {
   const table = new Table({
     head: [
       chalk.bold('Symbol'),
@@ -56,9 +56,11 @@ function buildSummaryTable(analyses: CoinAnalysis[]): string {
       chalk.bold('MACD'),
       chalk.bold('EMA Trend'),
       chalk.bold('Score'),
+      chalk.bold('Stop'),
+      chalk.bold('Target'),
     ],
     style: { head: [], border: [] },
-    colWidths: [9, 14, 14, 9, 9, 7, 10, 11, 9],
+    colWidths: [9, 14, 14, 9, 9, 7, 10, 11, 9, 8, 8],
     wordWrap: true,
   });
 
@@ -92,6 +94,8 @@ function buildSummaryTable(analyses: CoinAnalysis[]): string {
       macdStr,
       emaTrend,
       colorScore(score),
+      a.riskMetrics ? colorPercent(-a.riskMetrics.stopLossLevel * 100) : chalk.gray('—'),
+      a.riskMetrics ? colorPercent(a.riskMetrics.takeProfitLevel * 100) : chalk.gray('—'),
     ]);
   }
 
@@ -102,7 +106,7 @@ function printSection(
   title: string,
   emoji: string,
   color: ChalkInstance,
-  analyses: CoinAnalysis[],
+  analyses: EnhancedCoinAnalysis[],
   showSignals: boolean = true
 ): void {
   if (analyses.length === 0) return;
@@ -119,6 +123,18 @@ function printSection(
       console.log(color(`\n  📌 ${chalk.bold(a.coin.symbol)} — ${a.coin.name}`));
       for (const signal of a.signals) {
         console.log(`     ${signal}`);
+      }
+      // Exit plan: stop-loss / take-profit as % and absolute price levels
+      if (a.riskMetrics) {
+        const entry = a.coin.currentPrice;
+        const stopPrice = entry * (1 - a.riskMetrics.stopLossLevel);
+        const targetPrice = entry * (1 + a.riskMetrics.takeProfitLevel);
+        console.log(
+          chalk.red(`     🛑 Stop-loss: ${formatPercent(-a.riskMetrics.stopLossLevel * 100)} → exit at ${formatPrice(stopPrice)}`)
+        );
+        console.log(
+          chalk.green(`     🎯 Take-profit: ${formatPercent(a.riskMetrics.takeProfitLevel * 100)} → exit at ${formatPrice(targetPrice)}`)
+        );
       }
     }
   }
