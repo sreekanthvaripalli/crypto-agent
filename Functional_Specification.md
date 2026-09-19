@@ -78,7 +78,9 @@ flowchart TB
 
 | Component | File | Responsibility |
 |-----------|------|----------------|
-| **Fetcher** | `src/fetcher/coingecko.ts` | Calls CoinGecko API, handles rate limits (2s delay between calls), returns raw market data |
+| **Fetcher** | `src/fetcher/coingecko.ts` | Calls CoinGecko API, handles rate limits (2s delay between calls), returns raw market data with Binance fallback |
+| **Binance Provider** | `src/fetcher/binance.ts` | Public REST API fallback for 24h market tickers and 4h OHLC price candles |
+| **Derivatives & On-Chain** | `src/analyzer/derivatives-onchain.ts` | Queries Binance Futures (funding rates, open interest) & Mempool.space (BTC congestion, sat/vB fees) |
 | **News Service** | `src/fetcher/news.ts` | Fetches crypto news from CoinGecko API, performs sentiment analysis, caches news data |
 | **Cache** | `src/database/db.ts` | Saves/loads data to JSON file so you don't re-fetch within 24 hours |
 | **Analyzer** | `src/analyzer/indicators.ts` | Calculates all technical indicators from OHLC price data |
@@ -87,7 +89,9 @@ flowchart TB
 | **ML Sentiment Analyzer** | `src/analyzer/ml-sentiment.ts` | TF-IDF vectorization, ensemble methods, context pattern recognition, advanced keyword matching |
 | **News Validator** | `src/analyzer/news-validator.ts` | Validates technical analysis with news sentiment, calculates alignment scores, adjusts confidence |
 | **Classifier** | `src/analyzer/classifier.ts` | Scores each coin (-100 to +100) and assigns BUY/WATCHLIST/AVOID |
+| **Notifier** | `src/output/notifier.ts` | Dispatches Telegram & Discord Webhook notifications for trade alerts |
 | **Reporter** | `src/output/reporter.ts` | Formats the colored terminal output and writes JSON reports |
+| **Web Server** | `src/server/server.ts` | Express REST server and static dark-mode Web Dashboard UI |
 | **Scheduler** | `src/scheduler.ts` | Runs the agent automatically on a schedule (e.g., daily at 8am) |
 
 ---

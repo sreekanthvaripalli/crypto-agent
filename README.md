@@ -30,6 +30,17 @@ A professional-grade crypto market analysis agent that checks the top 50 coins b
 - **Context Pattern Recognition** - Regex-based phrase detection for strong signals
 - **Multi-factor Confidence Scoring** - Weighted combination of all sentiment methods
 
+### 🌐 Free Alternative Data Provider Fallback
+- **Binance Public Spot REST API Integration** - Automatic, keyless failover when CoinGecko encounters HTTP 429 rate limits or network issues.
+
+### ⛓️ Derivatives & On-Chain Analytics
+- **Binance Futures Derivatives** - Real-time Funding Rate, Open Interest, and leverage sentiment classification.
+- **Bitcoin On-Chain Health** - Mempool congestion tracking, fastest/half-hour sat/vB fees, and unconfirmed transaction counts via Mempool.space.
+
+### 🖥️ Real-Time Web Dashboard & Webhook Alerts
+- **Interactive Web UI** - Dark-mode web interface (`npm run serve`) displaying live signal tables, market regime state, indicator scores, and stop losses.
+- **Telegram & Discord Webhooks** - Automated alert dispatching for high-confidence `BUY` and `AVOID` trading setups.
+
 ### 📊 Portfolio Analysis and Management
 - **Portfolio-Level Risk Assessment** - Overall risk scoring and diversification analysis
 - **Risk Metrics Calculation** - Volatility, max drawdown, Sharpe ratio, VaR
@@ -120,6 +131,12 @@ npm run dev -- --no-json
 npm run dev -- --refresh --limit=100
 ```
 
+### Run Web Dashboard & Server
+```bash
+# Start the Express Web Server and Dashboard UI at http://localhost:3000
+npm run serve
+```
+
 ### Configuration (Environment Variables)
 | Variable | Default | Description |
 |---|---|---|
@@ -129,6 +146,10 @@ npm run dev -- --refresh --limit=100
 | `FETCH_DELAY_MS` | `2000` | Delay between CoinGecko calls (rate limiting) |
 | `CRYPTO_AGENT_DATA_DIR` | `./data` | Where the market cache JSON is stored |
 | `CRON_SCHEDULE` | `0 8 * * *` | Scheduler cron expression |
+| `PORT` | `3000` | Port for the Web Dashboard server |
+| `TELEGRAM_BOT_TOKEN` | _(none)_ | Telegram Bot Token for signal alerts |
+| `TELEGRAM_CHAT_ID` | _(none)_ | Telegram Chat ID for signal alerts |
+| `DISCORD_WEBHOOK_URL` | _(none)_ | Discord Webhook URL for signal alerts |
 
 ### Run with Daily Scheduler
 ```bash
@@ -150,6 +171,7 @@ CRON_SCHEDULE="0 * * * *" npm run schedule
 npm test          # Build + run the test suite (Node built-in test runner)
 npm run lint      # ESLint (flat config)
 npm run build     # Compile to dist/
+npm run serve     # Start the web dashboard & alert server
 npm run backtest  # Replay history and measure signal edge
 npm run tune      # Search for better classifier weights
 ```
