@@ -9,6 +9,7 @@ import { printReport, exportReportToJson } from './output/reporter';
 import { MarketReport, CoinAnalysis, EnhancedCoinAnalysis, NewsValidationResult, MarketRegime } from './types';
 import { assessMarketRegime } from './analyzer/market-regime';
 import { loadWeights } from './analyzer/scoring-config';
+import { fetchDerivativesData, fetchOnChainMetrics } from './analyzer/derivatives-onchain';
 import chalk from 'chalk';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
@@ -111,12 +112,21 @@ async function run(): Promise<void> {
     riskMetrics: riskManager.calculateRiskMetrics(coin, btcCandles)
   }));
 
+  // ─── Fetch Derivatives & On-Chain Analytics ──────────────────────────────────
+  console.log(chalk.cyan(`⛓️ Fetching Derivatives & On-Chain analytics...`));
+  const onChainData = await fetchOnChainMetrics();
+  const derivativesPromises = riskEnhancedAnalyses.map(async (analysis) => {
+    const deriv = await fetchDerivativesData(analysis.coin.symbol);
+    return { ...analysis, derivatives: deriv, onChain: onChainData };
+  });
+  const derivEnhancedAnalyses = await Promise.all(derivativesPromises);
+
   // ─── Validate with ML-enhanced news context ─────────────────────────────────
   console.log(chalk.cyan(`🤖 Analyzing news sentiment with ML...`));
   // Share one NewsService instance so its cache is reused across coins
   const mlSentimentAnalyzer = new MLSentimentAnalyzer(new NewsService());
   const validatedAnalyses = await Promise.all(
-    riskEnhancedAnalyses.map(analysis => mlSentimentAnalyzer.analyzeSentimentWithML(analysis))
+    derivEnhancedAnalyses.map(analysis => mlSentimentAnalyzer.analyzeSentimentWithML(analysis))
   );
 
   // ─── Separate into categories ───────────────────────────────────────────────

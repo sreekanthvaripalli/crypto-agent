@@ -71,11 +71,28 @@ export interface NewsValidationResult {
   validationNotes: string[];
 }
 
+export interface DerivativesData {
+  symbol: string;
+  fundingRate: number;
+  openInterest: number;
+  nextFundingTime: number;
+  sentiment: 'bullish' | 'bearish' | 'neutral' | 'overheated';
+}
+
+export interface OnChainMetrics {
+  unconfirmedTransactions: number;
+  fastestFeeSatVB: number;
+  halfHourFeeSatVB: number;
+  networkCongestion: 'low' | 'medium' | 'high';
+}
+
 export interface EnhancedCoinAnalysis extends CoinAnalysis {
   newsValidation?: NewsValidationResult;
   advancedIndicators?: AdvancedIndicators;
   riskMetrics?: RiskMetrics;
   portfolioImpact?: PortfolioImpact;
+  derivatives?: DerivativesData;
+  onChain?: OnChainMetrics;
 }
 
 export interface AdvancedIndicators {
