@@ -82,9 +82,9 @@
     function renderDashboard(report) {
       if (!report) return;
 
-      const buyList = report.buyList || [];
-      const watchList = report.watchList || [];
-      const avoidList = report.avoidList || [];
+      const buyList = (report.buyList || []).map(item => ({ ...item, category: item.category || 'BUY' }));
+      const watchList = (report.watchList || []).map(item => ({ ...item, category: item.category || 'WATCHLIST' }));
+      const avoidList = (report.avoidList || []).map(item => ({ ...item, category: item.category || 'AVOID' }));
 
       document.getElementById('buy-count').innerText = buyList.length;
       document.getElementById('watch-count').innerText = watchList.length;
@@ -121,7 +121,7 @@
         const name = item.name || (item.coin ? item.coin.name : symbol);
         const price = item.price !== undefined ? item.price : (item.coin ? item.coin.currentPrice : 0);
         const change24h = item.change24h !== undefined ? item.change24h : (item.coin ? item.coin.priceChange24hPercent : 0);
-        const category = item.category || 'WATCHLIST';
+        const category = item.category;
         const score = item.score !== undefined ? item.score : 0;
         const rsiVal = item.rsi !== undefined ? item.rsi : (item.indicators ? item.indicators.rsi : null);
 

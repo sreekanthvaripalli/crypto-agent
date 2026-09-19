@@ -132,18 +132,15 @@ async function run(): Promise<void> {
   // ─── Separate into categories ───────────────────────────────────────────────
   const buyList = validatedAnalyses
     .filter((a) => a.recommendation === 'BUY' && a.confidenceScore >= 0.6)
-    .sort((a, b) => b.confidenceScore - a.confidenceScore)
-    .slice(0, CONFIG.maxBuyResults);
+    .sort((a, b) => b.confidenceScore - a.confidenceScore);
 
   const avoidList = validatedAnalyses
     .filter((a) => a.recommendation === 'AVOID' && a.confidenceScore >= 0.6)
-    .sort((a, b) => b.confidenceScore - a.confidenceScore)
-    .slice(0, CONFIG.maxAvoidResults);
+    .sort((a, b) => b.confidenceScore - a.confidenceScore);
 
   const watchList = validatedAnalyses
     .filter((a) => a.recommendation === 'WATCHLIST' || a.confidenceScore < 0.6)
-    .sort((a, b) => b.confidenceScore - a.confidenceScore)
-    .slice(0, CONFIG.maxWatchResults);
+    .sort((a, b) => b.confidenceScore - a.confidenceScore);
 
   // ─── Build enhanced analysis objects ────────────────────────────────────────
   // Spread from riskEnhancedAnalyses (NOT the base `analyzed` list) so the
